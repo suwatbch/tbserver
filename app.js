@@ -1,10 +1,27 @@
 const puppeteer = require('puppeteer');
 const express = require('express');
 const cors = require('cors');
+const path = require('path');
 const app = express();
 
 app.use(cors());
 app.use(express.json());
+
+// Middleware ตรวจสอบ Content-Type
+const validateContentType = (req, res, next) => {
+    if (req.method === 'POST') {
+        const contentType = req.headers['content-type'];
+        if (!contentType || !contentType.includes('application/json')) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'Content-Type ต้องเป็น application/json'
+            });
+        }
+    }
+    next();
+};
+
+app.use(validateContentType);
 
 // ตัวแปรควบคุม Protocol
 const HTTP = 'http';                // Protocol สำหรับ HTTP
@@ -24,22 +41,6 @@ const REFRESH_DELAY = 500;  // เวลารอก่อนรีเฟรช
 const ERROR_DELAY = 2000;    // เวลารอหลังเกิด error
 const WAIT_TIMEOUT = 10000;  // เวลารอสูงสุดสำหรับ element
 const MAX_RETRIES = 2;      // จำนวนครั้งสูงสุดที่จะลองอ่านซ้ำ
-
-// ตัวแปรควบคุมข้อความแสดงผล
-const MESSAGES = {
-    ALREADY_RUNNING: 'โปรแกรมกำลังทำงานอยู่แล้ว',
-    ALREADY_STOPPED: 'โปรแกรมหยุดทำงานอยู่แล้ว',
-    STARTED: 'เริ่มการทำงานแล้ว',
-    STOPPED: 'หยุดการทำงานแล้ว',
-    RUNNING: 'โปรแกรมกำลังทำงานอยู่',
-    STOPPED_STATUS: 'โปรแกรมหยุดทำงาน',
-    CONNECTING: 'กำลังเชื่อมต่อกับ Chrome...',
-    NOT_ON_WORKDAY: 'ไม่ได้อยู่ที่หน้า Single Hall กำลังนำทาง...',
-    CANNOT_OPEN_TAB: 'ไม่สามารถเปิดแท็บใหม่ได้:',
-    ERROR: 'เกิดข้อผิดพลาดในการทำงาน:',
-    SERVER_RUNNING: `Server is running at ${HTTP}://${SERVER_HOST}:${SERVER_PORT}`,
-    INVALID_CONFIG: 'กรุณาระบุข้อมูลรถและเส้นทางให้ถูกต้อง'
-};
 
 // ตัวแปรควบคุมการทำงาน
 let isRunning = false;      // สถานะการทำงานของโปรแกรม
@@ -76,51 +77,47 @@ function isAllJobsAssigned() {
     return Object.values(currentConfig.myCars).every(count => count === 0);
 }
 
-// ฟังก์ชันตรวจสอบการเชื่อมต่อ Chrome
-async function checkChromeConnection() {
+// API สำหรับเริ่มการทำงาน
+app.post('/start', async (req, res) => {
+    const { cars, routes } = req.body;
+    
+    // ตรวจสอบรูปแบบข้อมูล
+    if (!cars || !Array.isArray(cars) || !routes || !Array.isArray(routes)) {
+        return res.json({ 
+            status: 'error', 
+            message: 'รูปแบบข้อมูลไม่ถูกต้อง กรุณาระบุ cars เป็น array ของ object และ routes เป็น array ของ string' 
+        });
+    }
+
+    if (isRunning) {
+        return res.json({ status: 'already_running', message: 'โปรแกรมกำลังทำงานอยู่แล้ว' });
+    }
+
     try {
+        // เชื่อมต่อกับ Chrome
         browser = await puppeteer.connect({
             browserURL: CHROME_DEBUG_URL,
             defaultViewport: null
         });
-        return true;
     } catch (error) {
-        console.error('ไม่สามารถเชื่อมต่อกับ Chrome ได้:', error.message);
-        return false;
-    }
-}
-
-// API สำหรับเริ่มการทำงาน
-app.post('/start', async (req, res) => {
-    let { cars, routes } = req.body;
-    
-    // กำหนดค่าเริ่มต้นถ้าไม่มีข้อมูลส่งมา
-    if (!cars || Object.keys(cars).length === 0) {
-        cars = { "4WJ": 1 };
-    }
-    if (!routes || routes.length === 0) {
-        routes = ["CT1-EA2"];
-    }
-
-    if (isRunning) {
-        return res.json({ status: 'already_running', message: MESSAGES.ALREADY_RUNNING });
-    }
-
-    // ตรวจสอบการเชื่อมต่อ Chrome
-    const isConnected = await checkChromeConnection();
-    if (!isConnected) {
         return res.json({ 
             status: 'error', 
             message: 'ไม่สามารถเชื่อมต่อกับ Chrome ได้ กรุณาตรวจสอบว่า Chrome เปิดอยู่ในโหมด debug' 
         });
     }
 
+    // แปลงข้อมูลรถจาก array เป็น object
+    const carsObject = cars.reduce((acc, car) => {
+        acc[car.type] = car.quantity;
+        return acc;
+    }, {});
+
     // เก็บค่า config ปัจจุบัน
     currentConfig = {
-        myCars: { ...cars },
-        routeDirections: [...routes],
-        assignedCars: Object.fromEntries(Object.keys(cars).map(key => [key, 0])),
-        assignedRoutes: Object.fromEntries(Object.keys(cars).map(key => [key, []]))
+        myCars: carsObject,
+        routeDirections: routes,
+        assignedCars: Object.fromEntries(Object.keys(carsObject).map(key => [key, 0])),
+        assignedRoutes: Object.fromEntries(Object.keys(carsObject).map(key => [key, []]))
     };
 
     isRunning = true;
@@ -128,21 +125,21 @@ app.post('/start', async (req, res) => {
     runLoop();
     res.json({ 
         status: 'started', 
-        message: MESSAGES.STARTED,
+        message: 'บอทเริ่มการทำงานแล้ว',
         config: {
-            cars: cars,
+            cars: carsObject,
             routes: routes
         }
     });
 });
 
 // API สำหรับหยุดการทำงาน
-app.post('/stop', async (req, res) => {
+app.get('/stop', async (req, res) => {
     if (!isRunning) {
-        return res.json({ status: 'already_stopped', message: MESSAGES.ALREADY_STOPPED });
+        return res.json({ status: 'already_stopped', message: 'โปรแกรมหยุดทำงานอยู่แล้ว' });
     }
     isRunning = false;
-    res.json({ status: 'stopped', message: MESSAGES.STOPPED });
+    res.json({ status: 'stopped', message: 'หยุดการทำงานแล้ว' });
 });
 
 // API สำหรับเช็คสถานะ
@@ -150,7 +147,7 @@ app.get('/status', (req, res) => {
     const status = {
         status: isRunning ? 'running' : 'stopped',
         currentRound: roundCount,
-        message: isRunning ? MESSAGES.RUNNING : MESSAGES.STOPPED_STATUS
+        message: isRunning ? 'โปรแกรมกำลังทำงานอยู่' : 'โปรแกรมหยุดทำงาน'
     };
 
     if (currentConfig) {
@@ -236,64 +233,13 @@ async function runLoop() {
                         if (results.success && results.actions.length > 0) {
                             for (const action of results.actions) {
                                 try {
-                                    // ตรวจสอบสถานะปุ่มก่อนคลิก
-                                    const isButtonClickable = await targetPage.evaluate((rowIndex) => {
-                                        const rows = document.querySelectorAll('table.el-table__body tbody tr');
-                                        const button = rows[rowIndex].querySelector('button');
-                                        return button && !button.disabled && button.style.display !== 'none';
-                                    }, action.index);
-
-                                    if (!isButtonClickable) {
-                                        console.log(`❌ ปุ่มไม่พร้อมใช้งาน: ${action.carType} เส้นทาง ${action.route}`);
-                                        continue;
-                                    }
-
-                                    // // คลิกปุ่มแข่งขันรับงาน
-                                    // await targetPage.evaluate((rowIndex) => {
-                                    //     const rows = document.querySelectorAll('table.el-table__body tbody tr');
-                                    //     const button = rows[rowIndex].querySelector('button');
-                                    //     if (button) button.click();
-                                    // }, action.index);
-
-                                    // // รอป๊อปอัพและคลิกยืนยัน
-                                    // await targetPage.waitForSelector('.el-dialog__wrapper', { timeout: 5000 });
-                                    // await targetPage.waitForTimeout(500);
-
-                                    // const isConfirmButtonClickable = await targetPage.evaluate(() => {
-                                    //     // ค้นหาปุ่มเฉพาะในป๊อปอัพ
-                                    //     const popup = document.querySelector('.el-dialog__wrapper:not([style*="display: none"])');
-                                    //     if (!popup) return false;
-
-                                    //     // ค้นหาปุ่มที่มีข้อความ "แข่งขันรับงาน"
-                                    //     const confirmButton = popup.querySelector('button span[data-v-406ad98a]');
-                                    //     return confirmButton && 
-                                    //            confirmButton.textContent.includes('แข่งขันรับงาน') && 
-                                    //            !confirmButton.closest('button').disabled;
-                                    // });
-
-                                    // if (!isConfirmButtonClickable) {
-                                    //     console.log(`❌ ปุ่มยืนยันไม่พร้อมใช้งาน: ${action.carType} เส้นทาง ${action.route}`);
-                                    //     continue;
-                                    // }
-
-                                    // await targetPage.evaluate(() => {
-                                    //     const popup = document.querySelector('.el-dialog__wrapper:not([style*="display: none"])');
-                                    //     if (popup) {
-                                    //         // คลิกปุ่มที่มีข้อความ "แข่งขันรับงาน"
-                                    //         const confirmButton = popup.querySelector('button span[data-v-406ad98a]');
-                                    //         if (confirmButton && confirmButton.textContent.includes('แข่งขันรับงาน')) {
-                                    //             confirmButton.closest('button').click();
-                                    //         }
-                                    //     }
-                                    // });
-
                                     // อัพเดทสถานะ
                                     currentConfig.myCars[action.carType]--;
                                     currentConfig.assignedCars[action.carType]++;
                                     currentConfig.assignedRoutes[action.carType].push(action.route);
 
                                     console.log(`✅ รับงานสำเร็จ: ${action.carType} เส้นทาง ${action.route}`);
-                                    await targetPage.waitForTimeout(500);
+                                    await new Promise(resolve => setTimeout(resolve, 500));
                                 } catch (error) {
                                     console.log(`❌ ไม่สามารถรับงานได้: ${error.message}`);
                                 }
@@ -306,7 +252,7 @@ async function runLoop() {
                                 console.log('ไม่พบงานที่ตรงเงื่อนไข, รอรอบถัดไป');
                             } else {
                                 console.log(`รอข้อมูล... (พยายามครั้งที่ ${retryCount}/${MAX_RETRIES})`);
-                                await targetPage.waitForTimeout(1000);
+                                await new Promise(resolve => setTimeout(resolve, 1000));
                             }
                         }
                     }
@@ -319,7 +265,7 @@ async function runLoop() {
 
                     await new Promise(resolve => setTimeout(resolve, REFRESH_DELAY));
                 } else {
-                    console.log(MESSAGES.NOT_ON_WORKDAY);
+                    console.log('ไม่ได้อยู่ที่หน้า Single Hall กำลังนำทาง...');
                     await targetPage.goto(WORKDAY_URL, { waitUntil: 'networkidle0' });
                 }
             } else {
@@ -327,7 +273,7 @@ async function runLoop() {
                     const newPage = await browser.newPage();
                     await newPage.goto(WORKDAY_URL, { waitUntil: 'networkidle0' });
                 } catch (error) {
-                    console.error(MESSAGES.CANNOT_OPEN_TAB, error.message);
+                    console.error('ไม่สามารถเปิดแท็บใหม่ได้:', error.message);
                     isRunning = false;
                     break;
                 }
@@ -335,12 +281,12 @@ async function runLoop() {
             }
         }
     } catch (error) {
-        console.error(MESSAGES.ERROR, error.message);
+        console.error('เกิดข้อผิดพลาดในการทำงาน:', error.message);
         isRunning = false;
     }
 }
 
 // เริ่ม server
 app.listen(SERVER_PORT, () => {
-    console.log(MESSAGES.SERVER_RUNNING);
+    console.log(`Server is running at ${HTTP}://${SERVER_HOST}:${SERVER_PORT}`);
 });
