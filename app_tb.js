@@ -10,7 +10,7 @@ const HTTP = 'http';                // Protocol สำหรับ HTTP
 const HTTPS = 'https';              // Protocol สำหรับ HTTPS
 
 // ตัวแปรควบคุม Server
-const SERVER_PORT = 5000;                    // พอร์ตที่ใช้สำหรับ Express server
+const SERVER_PORT = 4000;                    // พอร์ตที่ใช้สำหรับ Express server
 const SERVER_HOST = 'localhost';             // host ที่ใช้สำหรับ Express server
 const CHROME_DEBUG_URL = `${HTTP}://127.0.0.1:9222`;  // URL สำหรับเชื่อมต่อกับ Chrome debugger
 
@@ -24,7 +24,7 @@ const MODULE_NAME = 'Single Hall';                         // ชื่อโม
 const MESSAGES = {
     ALREADY_RUNNING: 'โปรแกรมกำลังทำงานอยู่แล้ว',
     ALREADY_STOPPED: 'โปรแกรมหยุดทำงานอยู่แล้ว',
-    STARTED: 'เริ่มการทำงานแล้ว',
+    STARTED: 'บอทเริ่มการทำงานแล้ว',
     STOPPED: 'หยุดการทำงานแล้ว',
     RUNNING: 'โปรแกรมกำลังทำงานอยู่',
     STOPPED_STATUS: 'โปรแกรมหยุดทำงาน',
@@ -49,16 +49,16 @@ app.use(express.json());
 // API สำหรับเริ่มการทำงาน
 app.post('/start', async (req, res) => {
     if (isRunning) {
-        return res.json({ status: 'already_running', message: MESSAGES.ALREADY_RUNNING });
+        return res.json({ status: 'success', message: MESSAGES.ALREADY_RUNNING });
     }
     isRunning = true;
     roundCount = 0;
     runLoop();
-    res.json({ status: 'started', message: MESSAGES.STARTED });
+    res.json({ status: 'success', message: MESSAGES.STARTED });
 });
 
 // API สำหรับหยุดการทำงาน
-app.post('/stop', async (req, res) => {
+app.get('/stop', async (req, res) => {
     if (!isRunning) {
         return res.json({ status: 'already_stopped', message: MESSAGES.ALREADY_STOPPED });
     }
@@ -98,21 +98,72 @@ async function runLoop() {
                 if (currentUrl === WORKDAY_URL) {
                     console.log(`\nรอบที่ ${roundCount}:`);
                     await targetPage.reload({ waitUntil: 'networkidle0' });
-                    await targetPage.waitForSelector('table');
+                    
+                    // รอให้ตารางและ pagination พร้อม
+                    await targetPage.waitForSelector('table.el-table__body tbody tr', { timeout: 10000 });
+                    await targetPage.waitForSelector('.el-pagination .el-pager li.number', { timeout: 10000 });
 
-                    const tableData = await targetPage.evaluate(() => {
-                        const rows = document.querySelectorAll('table tr');
-                        return Array.from(rows, row => {
-                            const cells = row.querySelectorAll('td, th');
-                            return Array.from(cells, cell => cell.innerText.trim());
+                    // อ่านจำนวนหน้าทั้งหมด
+                    const totalPages = await targetPage.evaluate(() => {
+                        const allNumberElements = document.querySelectorAll('.el-pager li.number');
+                        return parseInt(allNumberElements[allNumberElements.length - 1]?.textContent || '1');
+                    });
+
+                    let currentPage = 1;
+                    while (currentPage <= totalPages && isRunning) {
+                        // รอให้ตารางมีข้อมูล
+                        await targetPage.waitForSelector('table.el-table__body tbody tr', { timeout: 10000 });
+
+                        // อ่านข้อมูลในตาราง
+                        const tableData = await targetPage.evaluate(() => {
+                            const rows = document.querySelectorAll('table.el-table__body tbody tr');
+                            return Array.from(rows, row => {
+                                const cells = row.querySelectorAll('td');
+                                return {
+                                    routeId: cells[1]?.querySelector('button')?.textContent?.trim() || '',
+                                    type: cells[2]?.textContent?.trim() || '',
+                                    route: cells[3]?.textContent?.trim() || '',
+                                    distance: cells[4]?.textContent?.trim() || '',
+                                    startTime: cells[5]?.querySelector('span')?.textContent?.trim() || '',
+                                    duration: cells[6]?.textContent?.trim() || '',
+                                    endTime: cells[7]?.querySelector('span')?.textContent?.trim() || '',
+                                    amount: cells[8]?.querySelector('span')?.textContent?.trim() || '',
+                                    status: cells[9]?.querySelector('span')?.textContent?.trim() || ''
+                                };
+                            });
                         });
-                    });
 
-                    tableData.forEach(row => {
-                        if (row.length > 0) {
-                            console.log(row.join(' | '));
+                        // แสดงข้อมูล
+                        console.log(`\nหน้าที่ ${currentPage} จาก ${totalPages} หน้า:`);
+                        tableData.forEach((row, index) => {
+                            console.log(`${index + 1}. ${row.routeId} | ${row.type} | ${row.route} | ${row.distance} | ${row.startTime} | ${row.duration} | ${row.endTime} | ${row.amount} | ${row.status}`);
+                        });
+
+                        // ถ้ายังไม่ถึงหน้าสุดท้าย ให้กดปุ่มหน้าถัดไป
+                        if (currentPage < totalPages) {
+                            const nextPage = currentPage + 1;
+                            await targetPage.evaluate((page) => {
+                                const pageButtons = document.querySelectorAll('.el-pager li.number');
+                                const nextButton = Array.from(pageButtons).find(btn => btn.textContent.trim() === String(page));
+                                if (nextButton) nextButton.click();
+                            }, nextPage);
+                            
+                            // รอให้ข้อมูลในตารางเปลี่ยน
+                            await new Promise(resolve => setTimeout(resolve, 1000));
+                            
+                            // รอให้ปุ่มหน้าถัดไปเป็น active
+                            await targetPage.waitForFunction(
+                                (page) => {
+                                    const activeButton = document.querySelector('.el-pager li.active');
+                                    return activeButton && activeButton.textContent.trim() === String(page);
+                                },
+                                { timeout: 10000 },
+                                nextPage
+                            );
                         }
-                    });
+
+                        currentPage++;
+                    }
 
                     if (isRunning) {
                         await new Promise(resolve => setTimeout(resolve, REFRESH_DELAY));

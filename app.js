@@ -1,7 +1,6 @@
 const puppeteer = require('puppeteer');
 const express = require('express');
 const cors = require('cors');
-const path = require('path');
 const app = express();
 
 app.use(cors());
@@ -23,6 +22,9 @@ const validateContentType = (req, res, next) => {
 
 app.use(validateContentType);
 
+const URL_TBBOT = 'http://localhost:3000';
+const URL_TURBOROUTE = 'https://th.turboroute.ai/#/login';      
+
 // ตัวแปรควบคุม Protocol
 const HTTP = 'http';                // Protocol สำหรับ HTTP
 const HTTPS = 'https';              // Protocol สำหรับ HTTPS
@@ -38,8 +40,6 @@ const WORKDAY_URL = `${BASE_URL}/#/grab-single/single-hall`;    // URL ของ
 
 // ตัวแปรควบคุมเวลา (มิลลิวินาที)
 const REFRESH_DELAY = 500;  // เวลารอก่อนรีเฟรช
-const ERROR_DELAY = 2000;    // เวลารอหลังเกิด error
-const WAIT_TIMEOUT = 10000;  // เวลารอสูงสุดสำหรับ element
 const MAX_RETRIES = 2;      // จำนวนครั้งสูงสุดที่จะลองอ่านซ้ำ
 
 // ตัวแปรควบคุมการทำงาน
@@ -47,39 +47,13 @@ let isRunning = false;      // สถานะการทำงานของ�
 let browser;               // ตัวแปรเก็บ instance ของ browser
 let roundCount = 0;        // จำนวนรอบที่ทำงาน
 let currentConfig = null;  // ค่า config ปัจจุบัน
+let isTestMode = true;     // โหมดทดสอบ (ทำงานแค่รอบเดียว)
 
-// ฟังก์ชันแสดงสรุปผล
-function showSummary(isEndSummary = false) {
-    if (!currentConfig) return;
-
-    const now = new Date().toLocaleString('th-TH');
-    console.log(`\n📅 ${isEndSummary ? 'ผลสรุปสุดท้าย' : 'สรุปผลรายรอบ'}: ${now}`);
-    
-    console.log("\n🚗 รถว่าง:");
-    Object.entries(currentConfig.myCars).forEach(([carType, count]) => {
-        if (count > 0) {
-            console.log(`   - ${carType} จำนวน ${count} คัน`);
-        }
-    });
-
-    console.log("\n✅ รับงาน:");
-    Object.entries(currentConfig.assignedRoutes).forEach(([carType, routes]) => {
-        if (routes.length > 0) {
-            console.log(`   - ${carType} จำนวน ${routes.length} คัน 🛣️ เส้นทาง: ${routes.join(', ')}`);
-        }
-    });
-    console.log("\n-----------------------------------------------");
-}
-
-// ฟังก์ชันตรวจสอบว่ารับงานครบหรือยัง
-function isAllJobsAssigned() {
-    if (!currentConfig) return true;
-    return Object.values(currentConfig.myCars).every(count => count === 0);
-}
+//---------Use API--------------------------------------------------------
 
 // API สำหรับเริ่มการทำงาน
 app.post('/start', async (req, res) => {
-    const { cars, routes } = req.body;
+    const { cars, routes, testMode = true } = req.body;
     
     // ตรวจสอบรูปแบบข้อมูล
     if (!cars || !Array.isArray(cars) || !routes || !Array.isArray(routes)) {
@@ -90,7 +64,7 @@ app.post('/start', async (req, res) => {
     }
 
     if (isRunning) {
-        return res.json({ status: 'already_running', message: 'โปรแกรมกำลังทำงานอยู่แล้ว' });
+        return res.json({ status: 'success', message: 'โปรแกรมกำลังทำงานอยู่แล้ว' });
     }
 
     try {
@@ -102,7 +76,7 @@ app.post('/start', async (req, res) => {
     } catch (error) {
         return res.json({ 
             status: 'error', 
-            message: 'ไม่สามารถเชื่อมต่อกับ Chrome ได้ กรุณาตรวจสอบว่า Chrome เปิดอยู่ในโหมด debug' 
+            message: 'ไม่สามารถเชื่อมต่อกับ Chrome ได้ กรุณาเปิด Chrome ด้วย Debug Mode' 
         });
     }
 
@@ -122,13 +96,15 @@ app.post('/start', async (req, res) => {
 
     isRunning = true;
     roundCount = 0;
+    isTestMode = testMode;  // ตั้งค่าโหมดทดสอบ
     runLoop();
     res.json({ 
-        status: 'started', 
+        status: 'success', 
         message: 'บอทเริ่มการทำงานแล้ว',
         config: {
             cars: carsObject,
-            routes: routes
+            routes: routes,
+            testMode: testMode
         }
     });
 });
@@ -160,39 +136,48 @@ app.get('/status', (req, res) => {
     res.json(status);
 });
 
-// เพิ่มฟังก์ชันตรวจสอบสถานะ Chrome Debug Mode
-async function checkChromeDebugMode() {
-    try {
-        console.log("Checking Chrome Debug Mode...");
-        const browser = await puppeteer.connect({
-            browserURL: CHROME_DEBUG_URL,
-            defaultViewport: null
-        });
-        
-        await browser.disconnect();
-        return {
-            status: true,
-            message: 'Chrome กำลังทำงานในโหมด Debug'
-        };
-    } catch (error) {
-        console.log("Chrome Debug Mode check failed:", error.message);
-        return {
-            status: false,
-            message: 'กรุณาเปิด Chrome ด้วย Debug Mode'
-        };
-    }
+//---------Use API--------------------------------------------------------
+
+// ฟังก์ชันแสดงสรุปผล
+function showSummary(isEndSummary = false) {
+    if (!currentConfig) return;
+
+    const now = new Date().toLocaleString('th-TH');
+    console.log(`\n📅 ${isEndSummary ? 'ผลสรุปสุดท้าย' : 'สรุปผลรายรอบ'}: ${now}`);
+    
+    console.log("\n🚗 รถว่าง:");
+    Object.entries(currentConfig.myCars).forEach(([carType, count]) => {
+        if (count > 0) {
+            console.log(`   - ${carType} จำนวน ${count} คัน`);
+        }
+    });
+
+    console.log("\n✅ รับงาน:");
+    Object.entries(currentConfig.assignedRoutes).forEach(([carType, routes]) => {
+        if (routes.length > 0) {
+            console.log(`   - ${carType} จำนวน ${routes.length} คัน 🛣️ เส้นทาง: ${routes.join(', ')}`);
+        }
+    });
+    console.log("\n-----------------------------------------------");
 }
 
-// เพิ่ม API endpoint สำหรับตรวจสอบ Chrome Debug Mode
-app.get('/check-chrome', async (req, res) => {
-    const status = await checkChromeDebugMode();
-    res.json(status);
-});
+// ฟังก์ชันตรวจสอบว่ารับงานครบหรือยัง
+function isAllJobsAssigned() {
+    if (!currentConfig) return true;
+    return Object.values(currentConfig.myCars).every(count => count === 0);
+}
 
 // ฟังก์ชันหลักที่ทำงานวนลูป
 async function runLoop() {
     try {
         while (isRunning && !isAllJobsAssigned()) {
+            // ตรวจสอบการเชื่อมต่อ browser
+            if (!browser || !browser.isConnected()) {
+                console.error('Browser disconnected, stopping the loop');
+                isRunning = false;
+                break;
+            }
+
             roundCount++;
             const pages = await browser.pages();
             const targetPages = pages.filter(page => page.url().includes(BASE_URL));
@@ -222,44 +207,101 @@ async function runLoop() {
                     await targetPage.reload({ waitUntil: 'networkidle0' });
                     
                     // รอให้ตารางโหลดเสร็จ
-                    await targetPage.waitForSelector('table.el-table__body tbody tr', { timeout: WAIT_TIMEOUT });
+                    await targetPage.waitForSelector('table.el-table__body tbody tr', { timeout: 10000 });
 
-                    let retryCount = 0;
-                    while (retryCount < MAX_RETRIES && !isAllJobsAssigned()) {
-                        // อ่านและประมวลผลข้อมูลในตาราง
-                        const results = await targetPage.evaluate((config) => {
-                            const table = document.querySelector('table.el-table__body');
-                            if (!table) return { success: false, message: 'ไม่พบตาราง' };
+                    // อ่านและประมวลผลข้อมูลในตาราง
+                    const results = await targetPage.evaluate((config) => {
+                        const table = document.querySelector('table.el-table__body');
+                        if (!table) return { success: false, message: 'ไม่พบตาราง' };
 
-                            const tbody = table.querySelector('tbody');
-                            if (!tbody) return { success: false, message: 'ไม่พบข้อมูลในตาราง' };
+                        const tbody = table.querySelector('tbody');
+                        if (!tbody) return { success: false, message: 'ไม่พบข้อมูลในตาราง' };
 
-                            const rows = tbody.querySelectorAll('tr');
-                            if (!rows || rows.length === 0) return { success: false, message: 'ไม่พบแถวข้อมูล' };
+                        const rows = tbody.querySelectorAll('tr');
+                        if (!rows || rows.length === 0) {
+                            console.log('⚠️ ไม่พบข้อมูลในตาราง');
+                            return { 
+                                success: false, 
+                                message: 'ไม่พบแถวข้อมูล',
+                                hasNextPage: false,
+                                currentPage: '0',
+                                totalPages: '0'
+                            };
+                        }
 
-                            const actions = [];
-                            rows.forEach((row, index) => {
-                                const cells = row.querySelectorAll('td');
-                                if (cells.length >= 4) {
-                                    const route = cells[1].textContent.trim();
-                                    const carType = cells[3].textContent.trim();
+                        // ตรวจสอบว่ามีข้อมูลที่ต้องการหรือไม่
+                        let hasValidData = false;
+                        let totalJobs = 0;
+                        let validJobs = 0;
+                        const actions = [];
+                        rows.forEach((row, index) => {
+                            const cells = row.querySelectorAll('td');
+                            if (cells.length >= 4) {
+                                totalJobs++;
+                                const route = cells[1].textContent.trim();
+                                const carType = cells[3].textContent.trim();
 
-                                    if (carType in config.myCars && 
-                                        config.routeDirections.includes(route) && 
-                                        config.myCars[carType] > 0) {
-                                        
-                                        const button = row.querySelector('button span');
-                                        if (button && button.textContent.includes('แข่งขันรับงาน')) {
-                                            actions.push({ index, carType, route });
-                                        }
-                                    }
+                                if (carType in config.myCars && 
+                                    config.routeDirections.includes(route) && 
+                                    config.myCars[carType] > 0) {
+
+                                    actions.push({ index, carType, route });
+                                    hasValidData = true;
+                                    validJobs++;
+                                    
+                                    // const button = row.querySelector('button span');
+                                    // if (button && button.textContent.includes('แข่งขันรับงาน')) {
+                                    //     actions.push({ index, carType, route });
+                                    //     hasValidData = true;
+                                    //     validJobs++;
+                                    // }
                                 }
-                            });
+                            }
+                        });
 
-                            return { success: true, actions };
-                        }, currentConfig);
+                        // ตรวจสอบว่ามีปุ่มหน้าถัดไปหรือไม่
+                        const nextPageButton = document.querySelector('.btn-next:not([disabled])');
+                        const hasNextPage = nextPageButton !== null;
+                        
+                        // ดึงข้อมูลหน้าปัจจุบันและจำนวนหน้าทั้งหมด
+                        const pager = document.querySelector('.el-pager');
+                        let currentPage = '1';  // ค่าเริ่มต้นเป็นหน้า 1
+                        let totalPages = '1';   // ค่าเริ่มต้นเป็น 1 หน้า
+                        
+                        if (pager) {
+                            // หาหน้าปัจจุบันจาก class active
+                            const activePage = pager.querySelector('.number.active');
+                            if (activePage) {
+                                currentPage = activePage.textContent.trim();
+                            }
+                            
+                            // หาจำนวนหน้าทั้งหมดจากปุ่มตัวเลขทั้งหมด
+                            const allNumbers = Array.from(pager.querySelectorAll('.number'));
+                            if (allNumbers.length > 0) {
+                                const lastNumber = allNumbers[allNumbers.length - 1];
+                                totalPages = lastNumber.textContent.trim();
+                            }
+                        }
 
-                        if (results.success && results.actions.length > 0) {
+                        return { 
+                            success: true, 
+                            actions,
+                            hasNextPage,
+                            currentPage,
+                            totalPages,
+                            hasValidData,
+                            totalJobs,
+                            validJobs
+                        };
+                    }, currentConfig);
+
+                    if (results.success) {
+                        // แสดงข้อมูลหน้าปัจจุบัน
+                        console.log(`\n📄 กำลังอ่านข้อมูลหน้า ${results.currentPage} จากทั้งหมด ${results.totalPages} หน้า`);
+                        console.log(`📊 พบงานทั้งหมด ${results.totalJobs} รายการ`);
+                        
+                        if (results.actions.length > 0) {
+                            console.log(`✅ พบงานที่ตรงเงื่อนไข ${results.validJobs} รายการ`);
                             for (const action of results.actions) {
                                 try {
                                     // อัพเดทสถานะ
@@ -276,19 +318,109 @@ async function runLoop() {
                             showSummary();
                             break;
                         } else {
-                            retryCount++;
-                            if (retryCount >= MAX_RETRIES) {
-                                console.log('ไม่พบงานที่ตรงเงื่อนไข, รอรอบถัดไป');
-                            } else {
-                                console.log(`รอข้อมูล... (พยายามครั้งที่ ${retryCount}/${MAX_RETRIES})`);
+                            console.log(`⚠️ ไม่พบงานที่ตรงเงื่อนไข (${results.validJobs}/${results.totalJobs} รายการ)`);
+                        }
+
+                        // ถ้ามีหน้าถัดไป ให้คลิกปุ่มหน้าถัดไป
+                        if (results.hasNextPage) {
+                            const nextPageNum = parseInt(results.currentPage) + 1;
+                            console.log(`⏭️ กำลังเปลี่ยนไปหน้าถัดไป (${nextPageNum}/${results.totalPages})...`);
+                            
+                            try {
+                                // คลิกที่เลขหน้าถัดไปโดยตรง
+                                await targetPage.evaluate(async (nextPage) => {
+                                    // ค้นหาและคลิกที่เลขหน้าโดยตรง
+                                    const pageButtons = document.querySelectorAll('.el-pager li.number');
+                                    const nextButton = Array.from(pageButtons).find(btn => btn.textContent.trim() === String(nextPage));
+                                    if (nextButton) {
+                                        nextButton.click();
+                                        return true;
+                                    }
+                                    
+                                    // ถ้าไม่พบเลขหน้า ให้คลิกที่ปุ่ม next
+                                    const nextBtn = document.querySelector('.btn-next:not([disabled])');
+                                    if (nextBtn) {
+                                        nextBtn.click();
+                                        return true;
+                                    }
+                                    return false;
+                                }, nextPageNum);
+
+                                // รอให้หน้าเปลี่ยนและข้อมูลโหลดเสร็จ
+                                await targetPage.waitForFunction(
+                                    (expectedPage) => {
+                                        // ตรวจสอบว่าหน้าปัจจุบันตรงกับที่ต้องการ
+                                        const activeButton = document.querySelector('.el-pager li.active');
+                                        if (!activeButton || activeButton.textContent.trim() !== String(expectedPage)) {
+                                            return false;
+                                        }
+                                        
+                                        // ตรวจสอบว่าไม่มี loading mask
+                                        const loadingMask = document.querySelector('.el-loading-mask');
+                                        if (loadingMask) {
+                                            return false;
+                                        }
+                                        
+                                        // ตรวจสอบว่ามีข้อมูลในตาราง
+                                        const table = document.querySelector('table.el-table__body tbody');
+                                        const rows = table?.querySelectorAll('tr');
+                                        return rows && rows.length > 0;
+                                    },
+                                    { timeout: 10000 },
+                                    nextPageNum
+                                );
+
+                                // รอเพิ่มเติมเล็กน้อยเพื่อให้แน่ใจว่าข้อมูลโหลดเสร็จสมบูรณ์
                                 await new Promise(resolve => setTimeout(resolve, 1000));
+                                console.log('✅ เปลี่ยนหน้าและโหลดข้อมูลเสร็จสมบูรณ์');
+                            } catch (error) {
+                                console.log(`⚠️ เกิดข้อผิดพลาดในการเปลี่ยนหน้า: ${error.message}`);
+                                
+                                // ถ้าอยู่ในโหมดทดสอบ ให้หยุดทำงาน
+                                if (isTestMode) {
+                                    console.log('🛑 หยุดการทำงานเนื่องจากเกิดข้อผิดพลาดในโหมดทดสอบ');
+                                    isRunning = false;
+                                    showSummary(true);
+                                    break;
+                                }
+
+                                // ลองโหลดหน้าใหม่
+                                console.log('🔄 กำลังโหลดหน้าใหม่...');
+                                await targetPage.reload({ waitUntil: 'networkidle0' });
+                                await new Promise(resolve => setTimeout(resolve, 2000));
                             }
+                        } else {
+                            console.log('🏁 อ่านข้อมูลครบทุกหน้าแล้ว');
+                            if (!results.hasValidData) {
+                                console.log('⚠️ ไม่พบงานที่ตรงเงื่อนไขในทุกหน้า');
+                                console.log('📊 สรุปงานที่พบ:');
+                                console.log(`   - จำนวนงานทั้งหมด: ${results.totalJobs}`);
+                                console.log(`   - จำนวนงานที่ตรงเงื่อนไข: ${results.validJobs}`);
+                            }
+                            
+                            // ถ้าอยู่ในโหมดทดสอบ ให้หยุดทำงาน
+                            if (isTestMode) {
+                                console.log('🛑 หยุดการทำงานเนื่องจากอยู่ในโหมดทดสอบ');
+                                isRunning = false;
+                                showSummary(true);
+                                break;
+                            }
+                            
+                            console.log('🔄 เริ่มรอบใหม่...');
                         }
                     }
 
                     if (isAllJobsAssigned()) {
                         showSummary(true);
                         isRunning = false;
+                        break;
+                    }
+
+                    // ถ้าอยู่ในโหมดทดสอบ ให้หยุดทำงานหลังจากทำงานรอบแรกเสร็จ
+                    if (isTestMode && roundCount >= 1) {
+                        console.log('🛑 หยุดการทำงานเนื่องจากอยู่ในโหมดทดสอบ');
+                        isRunning = false;
+                        showSummary(true);
                         break;
                     }
 
@@ -306,7 +438,7 @@ async function runLoop() {
                     isRunning = false;
                     break;
                 }
-                await new Promise(resolve => setTimeout(resolve, ERROR_DELAY));
+                await new Promise(resolve => setTimeout(resolve, 2000));
             }
         }
     } catch (error) {
@@ -315,17 +447,43 @@ async function runLoop() {
     }
 }
 
+//---------Use Chome--------------------------------------------------------
+
+// เพิ่มฟังก์ชันตรวจสอบสถานะ Chrome Debug Mode
+async function checkChromeDebugMode() {
+    try {
+        const browser = await puppeteer.connect({
+            browserURL: CHROME_DEBUG_URL,
+            defaultViewport: null
+        });
+        
+        await browser.disconnect();
+        return {
+            status: true,
+            message: 'Chrome กำลังทำงานใน Debug Mode'
+        };
+    } catch (error) {
+        return {
+            status: false,
+            message: 'กรุณาเปิด Chrome ด้วย Debug Mode'
+        };
+    }
+}
+
+// เพิ่ม API endpoint สำหรับตรวจสอบ Chrome Debug Mode
+app.get('/check-chrome', async (req, res) => {
+    const status = await checkChromeDebugMode();
+    res.json(status);
+});
+
 // เพิ่มฟังก์ชันสำหรับเปิด Chrome ด้วย Debug Mode
 async function openChromeWithDebug(urls = []) {
     try {
-        console.log("Opening Chrome with Debug Mode...");
-        
-        // เปิด Chrome ด้วย Debug Mode
         const browser = await puppeteer.launch({
             headless: false,
             args: [
                 '--remote-debugging-port=9222',
-                urls[0] // ใช้ URL แรกเป็น start page แทน about:blank
+                urls[0] 
             ],
             defaultViewport: null
         });
@@ -337,7 +495,6 @@ async function openChromeWithDebug(urls = []) {
         for (let i = 1; i < urls.length; i++) {
             const page = await browser.newPage();
             await page.goto(urls[i], { waitUntil: 'networkidle0' });
-            console.log(`เปิด URL: ${urls[i]} สำเร็จ`);
         }
 
         return {
@@ -390,6 +547,27 @@ app.post('/open-chrome', async (req, res) => {
     res.json(result);
 });
 
+// ฟังก์ชันสำหรับหยุดการทำงาน
+async function stop() {
+    if (!isRunning) {
+        return { status: 'already_stopped', message: 'โปรแกรมหยุดทำงานอยู่แล้ว' };
+    }
+    
+    isRunning = false;
+    
+    // Cleanup browser resources
+    if (browser) {
+        try {
+            await browser.disconnect();
+            browser = null;
+        } catch (error) {
+            console.error('Error disconnecting browser:', error.message);
+        }
+    }
+    
+    return { status: 'stopped', message: 'หยุดการทำงานแล้ว' };
+}
+
 // ฟังก์ชันสำหรับปิด Chrome ทั้งหมด
 async function closeAllChrome() {
     try {
@@ -415,19 +593,10 @@ async function closeAllChrome() {
     }
 }
 
-// ฟังก์ชันสำหรับหยุดการทำงาน
-function stop() {
-    if (!isRunning) {
-        return { status: 'already_stopped', message: 'โปรแกรมหยุดทำงานอยู่แล้ว' };
-    }
-    isRunning = false;
-    return { status: 'stopped', message: 'หยุดการทำงานแล้ว' };
-}
-
 // API endpoint สำหรับปิด Chrome ทั้งหมด
 app.get('/close-chrome', async (req, res) => {
     // เรียกใช้ฟังก์ชัน stop เพื่อหยุดการทำงาน
-    const stopResult = stop();
+    const stopResult = await stop();
 
     // ปิด Chrome ทั้งหมด
     const closeResult = await closeAllChrome();
@@ -435,14 +604,16 @@ app.get('/close-chrome', async (req, res) => {
     if (closeResult.status) {
         // เปิด Chrome พร้อม URL ใหม่
         const openResult = await openChromeWithDebug([
-            "http://localhost:3000",
-            "https://th.turboroute.ai/#/login"
+            URL_TBBOT,
+            URL_TURBOROUTE
         ]);
         res.json(openResult);
     } else {
         res.json({ stopResult, closeResult });
     }
 });
+
+//---------UseChome--------------------------------------------------------
 
 // เริ่ม server
 app.listen(SERVER_PORT, () => {
