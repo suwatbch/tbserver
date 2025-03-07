@@ -28,7 +28,7 @@ const HTTP = 'http';                // Protocol สำหรับ HTTP
 const HTTPS = 'https';              // Protocol สำหรับ HTTPS
 
 // ตัวแปรควบคุม Server
-const SERVER_PORT = 5000;                    // พอร์ตที่ใช้สำหรับ Express server
+const SERVER_PORT = 4000;                    // พอร์ตที่ใช้สำหรับ Express server
 const SERVER_HOST = 'localhost';             // host ที่ใช้สำหรับ Express server
 const CHROME_DEBUG_URL = `${HTTP}://127.0.0.1:9222`;  // URL สำหรับเชื่อมต่อกับ Chrome debugger
 
@@ -160,6 +160,35 @@ app.get('/status', (req, res) => {
     res.json(status);
 });
 
+// เพิ่มฟังก์ชันตรวจสอบสถานะ Chrome Debug Mode
+async function checkChromeDebugMode() {
+    try {
+        console.log("Checking Chrome Debug Mode...");
+        const browser = await puppeteer.connect({
+            browserURL: CHROME_DEBUG_URL,
+            defaultViewport: null
+        });
+        
+        await browser.disconnect();
+        return {
+            status: true,
+            message: 'Chrome กำลังทำงานในโหมด Debug'
+        };
+    } catch (error) {
+        console.log("Chrome Debug Mode check failed:", error.message);
+        return {
+            status: false,
+            message: 'กรุณาเปิด Chrome ด้วย Debug Mode'
+        };
+    }
+}
+
+// เพิ่ม API endpoint สำหรับตรวจสอบ Chrome Debug Mode
+app.get('/check-chrome', async (req, res) => {
+    const status = await checkChromeDebugMode();
+    res.json(status);
+});
+
 // ฟังก์ชันหลักที่ทำงานวนลูป
 async function runLoop() {
     try {
@@ -285,6 +314,80 @@ async function runLoop() {
         isRunning = false;
     }
 }
+
+// เพิ่มฟังก์ชันสำหรับเปิด Chrome ด้วย Debug Mode
+async function openChromeWithDebug(urls = []) {
+    try {
+        console.log("Opening Chrome with Debug Mode...");
+        
+        // เปิด Chrome ด้วย Debug Mode
+        const browser = await puppeteer.launch({
+            headless: false,
+            args: [
+                '--remote-debugging-port=9222'
+            ],
+            defaultViewport: null
+        });
+
+        // รอให้ Chrome พร้อมใช้งาน
+        await new Promise(resolve => setTimeout(resolve, 2000));
+
+        // เปิด URL ในแท็บใหม่ตามจำนวนที่ส่งมา
+        for (const url of urls) {
+            const page = await browser.newPage();
+            await page.goto(url, { waitUntil: 'networkidle0' });
+            console.log(`เปิด URL: ${url} สำเร็จ`);
+        }
+
+        return {
+            status: true,
+            message: `เปิด Chrome และ URL ทั้งหมด ${urls.length} รายการสำเร็จ`,
+            openedUrls: urls
+        };
+    } catch (error) {
+        console.log("Failed to open Chrome:", error.message);
+        return {
+            status: false,
+            message: 'ไม่สามารถเปิด Chrome ได้',
+            error: error.message
+        };
+    }
+}
+
+// เพิ่ม API endpoint สำหรับเปิด Chrome พร้อม URL
+app.post('/open-chrome', async (req, res) => {
+    const { urls } = req.body;
+
+    // ตรวจสอบรูปแบบข้อมูล
+    if (!urls || !Array.isArray(urls)) {
+        return res.status(400).json({
+            status: 'error',
+            message: 'กรุณาระบุ urls เป็น array ของ URL'
+        });
+    }
+
+    // ตรวจสอบความถูกต้องของ URL
+    const validUrls = urls.filter(url => {
+        try {
+            new URL(url);
+            return true;
+        } catch {
+            return false;
+        }
+    });
+
+    if (validUrls.length === 0) {
+        return res.status(400).json({
+            status: 'error',
+            message: 'ไม่พบ URL ที่ถูกต้อง'
+        });
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    const result = await openChromeWithDebug(validUrls);
+    res.json(result);
+});
 
 // เริ่ม server
 app.listen(SERVER_PORT, () => {
