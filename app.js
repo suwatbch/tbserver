@@ -324,7 +324,8 @@ async function openChromeWithDebug(urls = []) {
         const browser = await puppeteer.launch({
             headless: false,
             args: [
-                '--remote-debugging-port=9222'
+                '--remote-debugging-port=9222',
+                urls[0] // ใช้ URL แรกเป็น start page แทน about:blank
             ],
             defaultViewport: null
         });
@@ -332,11 +333,11 @@ async function openChromeWithDebug(urls = []) {
         // รอให้ Chrome พร้อมใช้งาน
         await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // เปิด URL ในแท็บใหม่ตามจำนวนที่ส่งมา
-        for (const url of urls) {
+        // เปิด URL ที่เหลือในแท็บใหม่ (เริ่มจากตัวที่ 2)
+        for (let i = 1; i < urls.length; i++) {
             const page = await browser.newPage();
-            await page.goto(url, { waitUntil: 'networkidle0' });
-            console.log(`เปิด URL: ${url} สำเร็จ`);
+            await page.goto(urls[i], { waitUntil: 'networkidle0' });
+            console.log(`เปิด URL: ${urls[i]} สำเร็จ`);
         }
 
         return {
@@ -383,10 +384,64 @@ app.post('/open-chrome', async (req, res) => {
         });
     }
 
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    await new Promise(resolve => setTimeout(resolve, 2000));
     
     const result = await openChromeWithDebug(validUrls);
     res.json(result);
+});
+
+// ฟังก์ชันสำหรับปิด Chrome ทั้งหมด
+async function closeAllChrome() {
+    try {
+        // ใช้คำสั่งระบบในการปิด Chrome ทั้งหมด
+        if (process.platform === 'win32') {
+            // สำหรับ Windows
+            require('child_process').execSync('taskkill /F /IM chrome.exe');
+        } else {
+            // สำหรับ macOS และ Linux
+            require('child_process').execSync('pkill -f chrome');
+        }
+        
+        return {
+            status: true,
+            message: 'สั่งปิด Chrome ทั้งหมดแล้ว'
+        };
+    } catch (error) {
+        return {
+            status: false,
+            message: 'เกิดข้อผิดพลาดในการปิด Chrome',
+            error: error.message
+        };
+    }
+}
+
+// ฟังก์ชันสำหรับหยุดการทำงาน
+function stop() {
+    if (!isRunning) {
+        return { status: 'already_stopped', message: 'โปรแกรมหยุดทำงานอยู่แล้ว' };
+    }
+    isRunning = false;
+    return { status: 'stopped', message: 'หยุดการทำงานแล้ว' };
+}
+
+// API endpoint สำหรับปิด Chrome ทั้งหมด
+app.get('/close-chrome', async (req, res) => {
+    // เรียกใช้ฟังก์ชัน stop เพื่อหยุดการทำงาน
+    const stopResult = stop();
+
+    // ปิด Chrome ทั้งหมด
+    const closeResult = await closeAllChrome();
+
+    if (closeResult.status) {
+        // เปิด Chrome พร้อม URL ใหม่
+        const openResult = await openChromeWithDebug([
+            "http://localhost:3000",
+            "https://th.turboroute.ai/#/login"
+        ]);
+        res.json(openResult);
+    } else {
+        res.json({ stopResult, closeResult });
+    }
 });
 
 // เริ่ม server
