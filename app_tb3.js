@@ -149,66 +149,6 @@ async function getCurrentPage(page) {
     });
 }
 
-function displayTableData(tableData, currentPage, totalPages) {
-    console.log(`\nหน้าที่ ${currentPage} จาก ${totalPages} หน้า:`);
-
-    // ตัวแปรสำหรับเก็บสถิติ
-    let validJobs = 0;
-    const validJobsByType = {};
-
-    // แสดงข้อมูลและตรวจสอบเงื่อนไข
-    tableData.forEach((row, index) => {
-        // ดึงรหัสเส้นทาง
-        const routeCode = row.routeId.split('-')[0];
-
-        const isValid = false;
-        const status = isValid ? '✅' : '❌';
-
-        // ถ้างานผ่านเงื่อนไข
-        if (isValid) {
-            validJobs++;
-            validJobsByType[row.type] = (validJobsByType[row.type] || 0) + 1;
-        }
-
-        // แสดงข้อมูลพร้อมสถานะการตรวจสอบ
-        console.log(
-            `${index + 1}. ${status} ${row.routeId} | ${row.type} | ${routeCode} | ` +
-            `${row.distance} | ${row.startTime} | ${row.duration} | ` +
-            `${row.endTime} | ${row.amount} | ${row.status}`
-        );
-    });
-
-    // สรุปข้อมูลหน้าปัจจุบัน
-    console.log(`\n📊 สรุปหน้า ${currentPage}:`);
-    console.log(`   - พบงานทั้งหมด ${tableData.length} รายการ`);
-    console.log(`   - งานที่สามารถรับได้ ${validJobs} รายการ`);
-    
-    console.log('\n-----------------------------------------------');
-}
-
-// ฟังก์ชันแสดงสรุปผล
-function showSummary() {
-    if (!currentConfig) return;
-
-    const now = new Date().toLocaleString('th-TH');
-    console.log(`\n📅 ${isEndSummary ? 'ผลสรุปสุดท้าย' : 'สรุปผลรายรอบ'}: ${now}`);
-    
-    console.log("\n🚗 รถว่าง:");
-    Object.entries(currentConfig.myCars).forEach(([carType, count]) => {
-        if (count > 0) {
-            console.log(`   - ${carType} จำนวน ${count} คัน`);
-        }
-    });
-
-    console.log("\n✅ รับงาน:");
-    Object.entries(currentConfig.assignedRoutes).forEach(([carType, routes]) => {
-        if (routes.length > 0) {
-            console.log(`   - ${carType} จำนวน ${routes.length} คัน 🛣️ เส้นทาง: ${routes.join(', ')}`);
-        }
-    });
-    console.log("\n-----------------------------------------------");
-}
-
 // ฟังก์ชันหลักที่ทำงานวนลูป
 async function runLoop() {
     try {
@@ -267,7 +207,8 @@ async function runLoop() {
                                 });
                             });
 
-                            displayTableData(tableData, currentPage, await getTotalPages(targetPage));
+                            // แสดงข้อมูล
+                            console.log(`\nหน้าที่ ${currentPage} จาก ${await getTotalPages(targetPage)} หน้า:`);
                             
                             // ถ้ายังไม่ถึงหน้าสุดท้าย ให้กดปุ่มหน้าถัดไป
                             if (currentPage < await getTotalPages(targetPage)) {
@@ -281,8 +222,8 @@ async function runLoop() {
                                 // รอให้ข้อมูลในตารางเปลี่ยน
                                 await new Promise(resolve => setTimeout(resolve, 1000));
                             }
-                            currentPage++;
 
+                            currentPage++;
                         } catch (error) {
                             console.log('เกิดข้อผิดพลาดในการอ่านข้อมูล เริ่มอ่านใหม่จากหน้าแรก:', error.message);
                             currentPage = 1; // รีเซ็ตกลับไปหน้าแรก
@@ -294,10 +235,6 @@ async function runLoop() {
                         await new Promise(resolve => setTimeout(resolve, 1000));
                         roundCount++;
                     }
-
-                    // แสดงสรุปผลการรับงาน
-                    showSummary();
-
                 } else {
                     console.log('ไม่ได้อยู่ที่หน้า Single Hall กำลังนำทาง...');
                     await targetPage.goto(WORKDAY_URL, {

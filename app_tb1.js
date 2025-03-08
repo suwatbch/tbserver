@@ -111,8 +111,6 @@ async function runLoop() {
 
                     let currentPage = 1;
                     while (currentPage <= totalPages && isRunning) {
-                        // รอให้ตารางมีข้อมูล
-                        await targetPage.waitForSelector('table.el-table__body tbody tr', { timeout: 10000 });
 
                         // อ่านข้อมูลในตาราง
                         const tableData = await targetPage.evaluate(() => {
