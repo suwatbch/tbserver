@@ -39,11 +39,10 @@ const BASE_URL = `${HTTPS}://th.turboroute.ai`;     // URL หลักของ
 const WORKDAY_URL = `${BASE_URL}/#/grab-single/single-hall`;    // URL ของหน้า single-hall
 
 // ตัวแปรควบคุมการทำงาน
-let isRunning = false;      // สถานะการทำงานของโปรแกรม (true = กำลังทำงาน, false = หยุดทำงาน)
-let browser;               // ตัวแปรเก็บ instance ของ browser ที่เชื่อมต่อ
+let isRunning = false;      // สถานะการทำงานของโปรแกรม
+let browser;               // ตัวแปรเก็บ instance ของ browser
 let roundCount = 0;        // จำนวนรอบที่ทำงานไปแล้ว
-
-app.use(express.json());
+let currentRoundJobs = {}; // เพิ่มตัวแปรสำหรับเก็บงานในแต่ละรอบ
 
 //---------Use API--------------------------------------------------------
 
@@ -124,11 +123,52 @@ app.get('/stop', async (req, res) => {
 
 // API สำหรับเช็คสถานะ
 app.get('/status', (req, res) => {
-    res.json({
-        status: isRunning ? 'running' : 'stopped',
-        currentRound: roundCount,
-        message: isRunning ? 'โปรแกรมกำลังทำงานอยู่' : 'โปรแกรมหยุดทำงาน'
-    });
+    try {
+        const now = new Date().toLocaleString('th-TH');
+        
+        // ถ้าไม่มี currentConfig หรือไม่มี myCars
+        if (!currentConfig || !currentConfig.myCars || !currentConfig.assignedRoutes) {
+            return res.json({
+                status: isRunning ? 'running' : 'stopped',
+                currentRound: roundCount,
+                timestamp: now,
+                message: isRunning ? 'โปรแกรมกำลังทำงานอยู่' : 'โปรแกรมหยุดทำงาน',
+                details: {
+                    availableCars: ['ยังไม่มีการกำหนดรถ'],
+                    acceptedJobs: ['ยังไม่มีการรับงาน']
+                }
+            });
+        }
+
+        // เตรียมข้อมูลรถว่าง
+        const availableCars = Object.entries(currentConfig.myCars)
+            .filter(([_, count]) => count > 0)
+            .map(([type, count]) => `${type} จำนวน ${count} คัน`);
+
+        // เตรียมข้อมูลงานที่รับแล้ว
+        const acceptedJobs = Object.entries(currentConfig.assignedRoutes)
+            .filter(([_, routes]) => routes.length > 0)
+            .map(([type, routes]) => `${type} จำนวน ${routes.length} คัน เส้นทาง: ${routes.join(', ')}`);
+
+        res.json({
+            status: isRunning ? 'running' : 'stopped',
+            currentRound: roundCount,
+            timestamp: now,
+            message: isRunning ? 'โปรแกรมกำลังทำงานอยู่' : 'โปรแกรมหยุดทำงาน',
+            details: {
+                availableCars: availableCars.length > 0 ? availableCars : ['ไม่มีรถว่าง'],
+                acceptedJobs: acceptedJobs.length > 0 ? acceptedJobs : ['ยังไม่มีงานที่รับ']
+            }
+        });
+    } catch (error) {
+        // ถ้าเกิด error ให้ส่งค่าเริ่มต้นกลับไป
+        res.status(500).json({
+            status: 'error',
+            currentRound: 0,
+            message: 'โปรแกรมหยุดทำงาน',
+            error: error.message
+        });
+    }
 });
 
 //---------Use API--------------------------------------------------------
@@ -147,6 +187,94 @@ async function getCurrentPage(page) {
         const activeButton = document.querySelector('.el-pager li.active');
         return activeButton ? parseInt(activeButton.textContent.trim()) : 1;
     });
+}
+
+function checkJobConditions(job, config) {
+    if (!job || !config) return false;
+
+    const hasMatchingType = job.route in config.myCars; 
+    const hasMatchingRoute = config.routeDirections.includes(job.routeId);
+
+    if (hasMatchingType && hasMatchingRoute) {
+        const car_count = config.myCars[job.route];
+        if (car_count > 0) {
+            config.assignedCars[job.route]++;
+            config.assignedRoutes[job.route].push(job.routeId);
+            config.myCars[job.route]--;
+            return true;
+        }
+    }
+    return false;
+}
+
+function displayTableData(tableData, currentPage, totalPages) {
+    // ถ้าเป็นหน้าแรกของรอบใหม่ ให้เคลียร์ข้อมูลงานของรอบก่อนหน้า
+    if (currentPage === 1) {
+        currentRoundJobs = {};
+    }
+
+    console.log(`\nรอบที่ ${roundCount + 1}: -> หน้าที่ ${currentPage} จาก ${totalPages} หน้า:`);
+
+    // แสดงข้อมูลและตรวจสอบเงื่อนไข
+    tableData.forEach((row, index) => {
+        const isAccepted = checkJobConditions(row, currentConfig);
+        if (isAccepted) {  // ถ้ารับงานสำเร็จ
+            if (!currentRoundJobs[row.route]) {
+                currentRoundJobs[row.route] = [];
+            }
+            currentRoundJobs[row.route].push(row.routeId);
+        }
+    });
+
+    // สรุปข้อมูลหน้าปัจจุบัน
+    console.log(`📊 สรุปหน้า ${currentPage}:`);
+    console.log("🚗 รถว่าง:");
+    Object.entries(currentConfig.myCars).forEach(([carType, count]) => {
+        if (count > 0) {
+            console.log(`   - ${carType} จำนวน ${count} คัน`);
+        }
+    });
+
+    console.log("\n✅ รับงานในหน้านี้:");
+    if (Object.keys(currentRoundJobs).length > 0) {
+        Object.entries(currentRoundJobs).forEach(([carType, routes]) => {
+            console.log(`   - ${carType} จำนวน ${routes.length} คัน 🛣️ เส้นทาง: ${routes.join(', ')}`);
+        });
+    }
+    
+    // หยุดการทำงานเมื่อไม่มีรถว่างทุกประเภท
+    let hasAvailableCars = false;
+    Object.values(currentConfig.myCars).forEach(count => {
+        if (count > 0) {
+            hasAvailableCars = true;
+        }
+    });
+
+    // หยุดการทำงานเมื่อไม่มีรถว่างทุกประเภท
+    if (!hasAvailableCars) {
+        console.log('\n-----------------------------------------------');
+        console.log('🚫 ไม่มีรถว่างทุกประเภทแล้ว จึงหยุดการทำงาน');
+        console.log('-----------------------------------------------');
+        isRunning = false;
+        showSummary(true);
+    } else {
+        console.log('\n-----------------------------------------------');
+    }
+}
+
+// ฟังก์ชันแสดงสรุปผล
+function showSummary(isEnd = false) {  // เพิ่ม parameter สำหรับควบคุมการแสดงผล
+    if (!currentConfig) return;
+
+    const now = new Date().toLocaleString('th-TH');
+    console.log(`\n📅 ${isEnd ? 'ผลสรุปสุดท้าย' : 'สรุปผลรายรอบ'}: ${now}`);
+    console.log("✅ รับงาน:");
+    Object.entries(currentConfig.assignedRoutes).forEach(([carType, routes]) => {
+        if (routes.length > 0) {
+            console.log(`   - ${carType} จำนวน ${routes.length} คัน 🛣️ เส้นทาง: ${routes.join(', ')}`);
+        }
+    });
+    console.log("\n***------------------- END -------------------***");
 }
 
 // ฟังก์ชันหลักที่ทำงานวนลูป
@@ -169,12 +297,11 @@ async function runLoop() {
                 const currentUrl = await targetPage.url();
                 
                 if (currentUrl === WORKDAY_URL) {
-                    console.log(`\nรอบที่ ${roundCount + 1}:`);
                     await targetPage.reload({ waitUntil: 'networkidle0' });
                     
                     // รอให้ตารางและ pagination พร้อม
-                    await targetPage.waitForSelector('table.el-table__body tbody tr', { timeout: 10000 });
-                    await targetPage.waitForSelector('.el-pagination .el-pager li.number', { timeout: 10000 });
+                    await targetPage.waitForSelector('table.el-table__body tbody tr', { timeout: 5000 });
+                    await targetPage.waitForSelector('.el-pagination .el-pager li.number', { timeout: 5000 });
 
                     let currentPage = 1;
                     
@@ -207,8 +334,8 @@ async function runLoop() {
                                 });
                             });
 
-                            // แสดงข้อมูล
-                            console.log(`\nหน้าที่ ${currentPage} จาก ${await getTotalPages(targetPage)} หน้า:`);
+                            displayTableData(tableData, currentPage, await getTotalPages(targetPage));
+                            
                             
                             // ถ้ายังไม่ถึงหน้าสุดท้าย ให้กดปุ่มหน้าถัดไป
                             if (currentPage < await getTotalPages(targetPage)) {
@@ -220,10 +347,10 @@ async function runLoop() {
                                 }, nextPage);
                                 
                                 // รอให้ข้อมูลในตารางเปลี่ยน
-                                await new Promise(resolve => setTimeout(resolve, 1000));
+                                await new Promise(resolve => setTimeout(resolve, 500));
                             }
-
                             currentPage++;
+
                         } catch (error) {
                             console.log('เกิดข้อผิดพลาดในการอ่านข้อมูล เริ่มอ่านใหม่จากหน้าแรก:', error.message);
                             currentPage = 1; // รีเซ็ตกลับไปหน้าแรก
@@ -232,9 +359,31 @@ async function runLoop() {
                     }
 
                     if (isRunning) {
-                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        await new Promise(resolve => setTimeout(resolve, 500));
                         roundCount++;
+                        
+                        // เพิ่มการแสดงสรุปผลรายรอบ
+                        const now = new Date().toLocaleString('th-TH');
+                        console.log(`\n📊 สรุปผลรอบที่ ${roundCount}: ${now}`);
+                        console.log("🚗 รถว่าง:");
+                        Object.entries(currentConfig.myCars).forEach(([carType, count]) => {
+                            if (count > 0) {
+                                console.log(`   - ${carType} จำนวน ${count} คัน`);
+                            }
+                        });
+
+                        console.log("\n✅ รับงาน:");
+                        Object.entries(currentRoundJobs).forEach(([carType, routes]) => {
+                            if (routes.length > 0) {
+                                console.log(`   - ${carType} จำนวน ${routes.length} คัน 🛣️ เส้นทาง: ${routes.join(', ')}`);
+                            }
+                        });
+                        console.log('\n-----------------------------------------------');
+                        
+                        // เคลียร์ข้อมูลงานของรอบนี้
+                        currentRoundJobs = {};
                     }
+
                 } else {
                     console.log('ไม่ได้อยู่ที่หน้า Single Hall กำลังนำทาง...');
                     await targetPage.goto(WORKDAY_URL, {
@@ -252,7 +401,7 @@ async function runLoop() {
                     isRunning = false;
                     break;
                 }
-                await new Promise(resolve => setTimeout(resolve, 1000));
+                await new Promise(resolve => setTimeout(resolve, 500));
             }
         }
     } catch (error) {
@@ -304,7 +453,7 @@ async function openChromeWithDebug(urls = []) {
         execSync(command);
 
         // รอให้ Chrome พร้อมใช้งาน
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // เชื่อมต่อกับ Chrome ที่เปิดไว้
         const browser = await puppeteer.connect({
@@ -365,7 +514,7 @@ app.post('/open-chrome', async (req, res) => {
         });
     }
 
-    await new Promise(resolve => setTimeout(resolve, 2000));
+    await new Promise(resolve => setTimeout(resolve, 1000));
     
     const result = await openChromeWithDebug(validUrls);
     res.json(result);
@@ -378,6 +527,9 @@ async function stop() {
     }
     
     isRunning = false;
+    
+    // แสดงผลสรุปสุดท้าย
+    showSummary(true);
     
     // Cleanup browser resources
     if (browser) {

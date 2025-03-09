@@ -229,55 +229,15 @@ async function acceptJob(page, row) {
 
             if (!checkInput) {
                 console.log('ยังไม่มีการยืนยันตัวตน กำลังคลิก...');
-            
-                try {
-                    console.log('กำลังรอ Cloudflare iframe...');
-                    
-                    await page.waitForFunction(() => {
-                        return document.querySelectorAll('iframe[title*="Cloudflare"]').length > 0;
-                    }, { timeout: 10000 });
-                
-                    console.log('พบ Cloudflare iframe แล้ว');
-                
-                    const frames = await page.frames();
-                    const cloudflareFrame = frames.find(frame => frame.url().includes('turnstile'));
-                
-                    if (!cloudflareFrame) {
-                        throw new Error('ไม่พบ iframe ของ Cloudflare');
+                await page.evaluate(() => {
+                    const verifyContainer = document.querySelector('#verify-container');
+                    if (verifyContainer) {
+                        verifyContainer.click();
                     }
-                
-                    console.log('รอให้ checkbox โหลด...');
-                    await cloudflareFrame.waitForSelector('.cf-turnstile-checkbox', { timeout: 5000 });
-                
-                    console.log('ตรวจสอบว่ามีการติ๊กถูกหรือยัง...');
-                    const isChecked = await cloudflareFrame.evaluate(() => {
-                        const checkbox = document.querySelector('.cf-turnstile-checkbox input');
-                        return checkbox && checkbox.checked;
-                    });
-                
-                    if (!isChecked) {
-                        console.log('ยังไม่ได้ติ๊ก ถูก กำลังกด...');
-                        await cloudflareFrame.evaluate(() => {
-                            const checkbox = document.querySelector('.cf-turnstile-checkbox');
-                            checkbox.click();
-                        });
-                
-                        console.log('รอการตรวจสอบจาก Cloudflare...');
-                        await page.waitForFunction(() => {
-                            return document.querySelector('input[name="cf-turnstile-response"]')?.value?.length > 0;
-                        }, { timeout: 10000 });
-                
-                        console.log('Cloudflare ยืนยันตัวตนสำเร็จ!');
-                    } else {
-                        console.log('Checkbox ถูกติ๊กไปแล้ว');
-                    }
-                } catch (error) {
-                    console.log('เกิดข้อผิดพลาด:', error.message);
-                }
+                });
             } else {
                 console.log('มีการยืนยันตัวตนแล้ว');
             }
-            
 
             // รอจนกว่า popup จะหายไป หรือครบ timeout
             const popupClosed = await Promise.race([
