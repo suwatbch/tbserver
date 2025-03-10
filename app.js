@@ -115,9 +115,11 @@ app.post('/start', async (req, res) => {
 // API สำหรับหยุดการทำงาน
 app.get('/stop', async (req, res) => {
     if (!isRunning) {
+        console.log('โปรแกรมหยุดทำงานอยู่แล้ว');
         return res.json({ status: 'already_stopped', message: 'โปรแกรมหยุดทำงานอยู่แล้ว' });
     }
     isRunning = false;
+    console.log('หยุดการทำงานแล้ว');
     res.json({ status: 'stopped', message: 'หยุดการทำงานแล้ว' });
 });
 
@@ -128,6 +130,7 @@ app.get('/status', (req, res) => {
         
         // ถ้าไม่มี currentConfig หรือไม่มี myCars
         if (!currentConfig || !currentConfig.myCars || !currentConfig.assignedRoutes) {
+            console.log(isRunning ? 'โปรแกรมกำลังทำงานอยู่' : 'โปรแกรมหยุดทำงาน');
             return res.json({
                 status: isRunning ? 'running' : 'stopped',
                 currentRound: roundCount,
@@ -161,6 +164,7 @@ app.get('/status', (req, res) => {
             }
         });
     } catch (error) {
+        console.log('โปรแกรมหยุดทำงาน');
         // ถ้าเกิด error ให้ส่งค่าเริ่มต้นกลับไป
         res.status(500).json({
             status: 'error',
@@ -229,48 +233,32 @@ async function acceptJob(page, row) {
 
             if (!checkInput) {
                 console.log('ยังไม่มีการยืนยันตัวตน กำลังคลิก...');
-            
+
                 try {
-                    console.log('กำลังรอ Cloudflare iframe...');
-                    
-                    await page.waitForFunction(() => {
-                        return document.querySelectorAll('iframe[title*="Cloudflare"]').length > 0;
-                    }, { timeout: 10000 });
-                
-                    console.log('พบ Cloudflare iframe แล้ว');
-                
-                    const frames = await page.frames();
-                    const cloudflareFrame = frames.find(frame => frame.url().includes('turnstile'));
-                
-                    if (!cloudflareFrame) {
-                        throw new Error('ไม่พบ iframe ของ Cloudflare');
-                    }
-                
-                    console.log('รอให้ checkbox โหลด...');
-                    await cloudflareFrame.waitForSelector('.cf-turnstile-checkbox', { timeout: 5000 });
-                
-                    console.log('ตรวจสอบว่ามีการติ๊กถูกหรือยัง...');
-                    const isChecked = await cloudflareFrame.evaluate(() => {
+                    console.log('กำลังรอ Cloudflare checkbox...');
+
+                    // ค้นหาและคลิกที่ checkbox โดยตรง
+                    const checkboxClicked = await page.evaluate(() => {
                         const checkbox = document.querySelector('.cf-turnstile-checkbox input');
-                        return checkbox && checkbox.checked;
-                    });
-                
-                    if (!isChecked) {
-                        console.log('ยังไม่ได้ติ๊ก ถูก กำลังกด...');
-                        await cloudflareFrame.evaluate(() => {
-                            const checkbox = document.querySelector('.cf-turnstile-checkbox');
+                        if (checkbox && !checkbox.checked) {
                             checkbox.click();
-                        });
-                
-                        console.log('รอการตรวจสอบจาก Cloudflare...');
-                        await page.waitForFunction(() => {
-                            return document.querySelector('input[name="cf-turnstile-response"]')?.value?.length > 0;
-                        }, { timeout: 10000 });
-                
-                        console.log('Cloudflare ยืนยันตัวตนสำเร็จ!');
+                            return true;
+                        }
+                        return false;
+                    });
+
+                    if (checkboxClicked) {
+                        console.log('คลิก checkbox สำเร็จ!');
                     } else {
-                        console.log('Checkbox ถูกติ๊กไปแล้ว');
+                        console.log('ไม่สามารถคลิก checkbox ได้ หรือ checkbox ถูกติ๊กไปแล้ว');
                     }
+
+                    console.log('รอการตรวจสอบจาก Cloudflare...');
+                    await page.waitForFunction(() => {
+                        return document.querySelector('input[name="cf-turnstile-response"]')?.value?.length > 0;
+                    }, { timeout: 10000 });
+
+                    console.log('Cloudflare ยืนยันตัวตนสำเร็จ!');
                 } catch (error) {
                     console.log('เกิดข้อผิดพลาด:', error.message);
                 }
@@ -575,6 +563,7 @@ async function checkChromeDebugMode() {
 // เพิ่ม API endpoint สำหรับตรวจสอบ Chrome Debug Mode
 app.get('/check-chrome', async (req, res) => {
     const status = await checkChromeDebugMode();
+    console.log('check-chrome');
     res.json(status);
 });
 
