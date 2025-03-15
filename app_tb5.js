@@ -22,7 +22,7 @@ const validateContentType = (req, res, next) => {
 
 app.use(validateContentType);
 
-const URL_TBBOT = 'https://tbbot.swmaxnet.com';
+const URL_TBBOT = 'http://localhost:3000';
 const URL_TURBOROUTE = 'https://th.turboroute.ai/#/login';  
 
 // ตัวแปรควบคุม Protocol
@@ -31,8 +31,8 @@ const HTTPS = 'https';              // Protocol สำหรับ HTTPS
 
 // ตัวแปรควบคุม Server
 const SERVER_PORT = 4000;                    // พอร์ตที่ใช้สำหรับ Express server
-const SERVER_HOST = 'https://tbbot.swmaxnet.com';             // host ที่ใช้สำหรับ Express server
-const CHROME_DEBUG_URL = `http://192.168.1.102:9222`;  // URL สำหรับเชื่อมต่อกับ Chrome debugger
+const SERVER_HOST = 'localhost';             // host ที่ใช้สำหรับ Express server
+const CHROME_DEBUG_URL = `${HTTP}://127.0.0.1:9222`;  // URL สำหรับเชื่อมต่อกับ Chrome debugger
 
 // ตัวแปรควบคุม URL และชื่อเว็บ
 const BASE_URL = `${HTTPS}://th.turboroute.ai`;     // URL หลักของเว็บไซต์
