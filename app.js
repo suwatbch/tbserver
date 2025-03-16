@@ -195,64 +195,39 @@ async function getCurrentPage(page) {
 
 async function acceptJob(page, row) {
     try {
-        // คลิกปุ่ม "แข่งขันรับงาน" ในแถวนั้นๆ
-        const clickResult = await page.evaluate((rowElement) => {
-            try {
-                const acceptButton = rowElement.querySelector('span.grab-single');
-                if (acceptButton) {
-                    acceptButton.click();
+        // รอให้ popup แสดงขึ้นมา
+        try {
+            await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
+                visible: true,
+                timeout: 3000
+            });
+
+            // คลิกปุ่มยืนยันตัวตน
+            const confirmClicked = await page.evaluate(() => {
+                const confirmButton = document.querySelector('.el-dialog__wrapper[flag="true"] .confirm-button');
+                if (confirmButton) {
+                    confirmButton.click();
                     return true;
                 }
                 return false;
-            } catch (err) {
-                return false;
-            }
-        }, row);
+            });
 
-        if (!clickResult) {
-            console.log('ไม่พบปุ่มรับงานหรือไม่สามารถคลิกได้');
+            if (confirmClicked) {
+                console.log('คลิกปุ่มยืนยันตัวตนสำเร็จ!');
+            } else {
+                console.log('ไม่สามารถคลิกปุ่มยืนยันตัวตนได้');
+            }
+
+            // หยุดการทำงานของโปรแกรม
+            isRunning = false;
+            console.log('โปรแกรมหยุดทำงานแล้ว');
+
+            return true;
+
+        } catch (error) {
+            console.log('เกิดข้อผิดพลาดระหว่างรอ Popup:', error.message);
             return false;
         }
-
-        // หยุดการทำงานของโปรแกรม
-        isRunning = false;
-        console.log('โปรแกรมหยุดทำงานแล้ว');
-
-        return true;
-
-        // // รอให้ popup แสดงขึ้นมา
-        // try {
-        //     await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
-        //         visible: true,
-        //         timeout: 3000
-        //     });
-
-        //     // คลิกปุ่มยืนยันตัวตน
-        //     const confirmClicked = await page.evaluate(() => {
-        //         const confirmButton = document.querySelector('.el-dialog__wrapper[flag="true"] .confirm-button');
-        //         if (confirmButton) {
-        //             confirmButton.click();
-        //             return true;
-        //         }
-        //         return false;
-        //     });
-
-        //     if (confirmClicked) {
-        //         console.log('คลิกปุ่มยืนยันตัวตนสำเร็จ!');
-        //     } else {
-        //         console.log('ไม่สามารถคลิกปุ่มยืนยันตัวตนได้');
-        //     }
-
-        //     // หยุดการทำงานของโปรแกรม
-        //     isRunning = false;
-        //     console.log('โปรแกรมหยุดทำงานแล้ว');
-
-        //     return true;
-
-        // } catch (error) {
-        //     console.log('เกิดข้อผิดพลาดระหว่างรอ Popup:', error.message);
-        //     return false;
-        // }
 
     } catch (error) {
         console.error('เกิดข้อผิดพลาดในการรับงาน:', error.message);
