@@ -22,27 +22,27 @@ const validateContentType = (req, res, next) => {
 
 app.use(validateContentType);
 
-const URL_TBBOT = 'https://tbbot.swmaxnet.com';
+const URL_TBBOT = 'http://127.0.0.1:3000';
 const URL_TURBOROUTE = 'https://th.turboroute.ai/#/login';  
 
 // ตัวแปรควบคุม Protocol
-const HTTP = 'http';                // Protocol สำหรับ HTTP
-const HTTPS = 'https';              // Protocol สำหรับ HTTPS
+const HTTP = 'http';                                            // Protocol สำหรับ HTTP
+const HTTPS = 'https';                                          // Protocol สำหรับ HTTPS
 
 // ตัวแปรควบคุม Server
-const SERVER_PORT = 4000;                    // พอร์ตที่ใช้สำหรับ Express server
-const SERVER_HOST = 'https://tbbot.swmaxnet.com';             // host ที่ใช้สำหรับ Express server
-const CHROME_DEBUG_URL = `http://192.168.1.102:9222`;  // URL สำหรับเชื่อมต่อกับ Chrome debugger
+const SERVER_PORT = 4000;                                       // พอร์ตที่ใช้สำหรับ Express server
+const SERVER_HOST = '127.0.0.1';                                // host ที่ใช้สำหรับ Express server
+const CHROME_DEBUG_URL = `${HTTP}://127.0.0.1:9222`;            // URL สำหรับเชื่อมต่อกับ Chrome debugger
 
 // ตัวแปรควบคุม URL และชื่อเว็บ
-const BASE_URL = `${HTTPS}://th.turboroute.ai`;     // URL หลักของเว็บไซต์
+const BASE_URL = `${HTTPS}://th.turboroute.ai`;                 // URL หลักของเว็บไซต์
 const WORKDAY_URL = `${BASE_URL}/#/grab-single/single-hall`;    // URL ของหน้า single-hall
 
 // ตัวแปรควบคุมการทำงาน
-let isRunning = false;      // สถานะการทำงานของโปรแกรม
-let browser;               // ตัวแปรเก็บ instance ของ browser
-let roundCount = 0;        // จำนวนรอบที่ทำงานไปแล้ว
-let currentRoundJobs = {}; // เพิ่มตัวแปรสำหรับเก็บงานในแต่ละรอบ
+let isRunning = false;                                          // สถานะการทำงานของโปรแกรม
+let browser;                                                    // ตัวแปรเก็บ instance ของ browser
+let roundCount = 0;                                             // จำนวนรอบที่ทำงานไปแล้ว
+let currentRoundJobs = {};                                      // เพิ่มตัวแปรสำหรับเก็บงานในแต่ละรอบ
 
 //---------Use API--------------------------------------------------------
 
