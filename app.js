@@ -214,39 +214,45 @@ async function acceptJob(page, row) {
             return false;
         }
 
-        // รอให้ popup แสดงขึ้นมา
-        try {
-            await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
-                visible: true,
-                timeout: 3000
-            });
+        // หยุดการทำงานของโปรแกรม
+        isRunning = false;
+        console.log('โปรแกรมหยุดทำงานแล้ว');
 
-            // คลิกปุ่มยืนยันตัวตน
-            const confirmClicked = await page.evaluate(() => {
-                const confirmButton = document.querySelector('.el-dialog__wrapper[flag="true"] .confirm-button');
-                if (confirmButton) {
-                    confirmButton.click();
-                    return true;
-                }
-                return false;
-            });
+        return true;
 
-            if (confirmClicked) {
-                console.log('คลิกปุ่มยืนยันตัวตนสำเร็จ!');
-            } else {
-                console.log('ไม่สามารถคลิกปุ่มยืนยันตัวตนได้');
-            }
+        // // รอให้ popup แสดงขึ้นมา
+        // try {
+        //     await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
+        //         visible: true,
+        //         timeout: 3000
+        //     });
 
-            // หยุดการทำงานของโปรแกรม
-            isRunning = false;
-            console.log('โปรแกรมหยุดทำงานแล้ว');
+        //     // คลิกปุ่มยืนยันตัวตน
+        //     const confirmClicked = await page.evaluate(() => {
+        //         const confirmButton = document.querySelector('.el-dialog__wrapper[flag="true"] .confirm-button');
+        //         if (confirmButton) {
+        //             confirmButton.click();
+        //             return true;
+        //         }
+        //         return false;
+        //     });
 
-            return true;
+        //     if (confirmClicked) {
+        //         console.log('คลิกปุ่มยืนยันตัวตนสำเร็จ!');
+        //     } else {
+        //         console.log('ไม่สามารถคลิกปุ่มยืนยันตัวตนได้');
+        //     }
 
-        } catch (error) {
-            console.log('เกิดข้อผิดพลาดระหว่างรอ Popup:', error.message);
-            return false;
-        }
+        //     // หยุดการทำงานของโปรแกรม
+        //     isRunning = false;
+        //     console.log('โปรแกรมหยุดทำงานแล้ว');
+
+        //     return true;
+
+        // } catch (error) {
+        //     console.log('เกิดข้อผิดพลาดระหว่างรอ Popup:', error.message);
+        //     return false;
+        // }
 
     } catch (error) {
         console.error('เกิดข้อผิดพลาดในการรับงาน:', error.message);
