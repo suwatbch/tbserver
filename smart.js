@@ -13,7 +13,7 @@ const SERVER_PORT = 4000;
 const SERVER_HOST = 'localhost';
 
 // ตัวแปรควบคุม URL
-const TARGET_URL = 'https://smart.samartcorp.com/login.aspx';
+const PAGE_URL = 'https://smart.samartcorp.com/login.aspx';
 
 // ฟังก์ชันสำหรับคลิก checkbox
 async function clickCheckbox(page) {
@@ -79,7 +79,7 @@ async function run() {
 
             // ตรวจสอบ URL ปัจจุบัน
             const currentUrl = targetPage.url();
-            if (currentUrl === TARGET_URL) {
+            if (currentUrl === PAGE_URL) {
                 await showNotification();
             }
 
@@ -87,7 +87,7 @@ async function run() {
             targetPage.on('framenavigated', async frame => {
                 if (frame === targetPage.mainFrame()) {
                     const url = frame.url();
-                    if (url === TARGET_URL) {
+                    if (url === PAGE_URL) {
                         await showNotification();
                     }
                 }
