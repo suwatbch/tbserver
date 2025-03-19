@@ -2,6 +2,7 @@ const puppeteer = require('puppeteer');
 const express = require('express');
 const cors = require('cors');
 const app = express();
+const axios = require('axios');
 
 app.use(cors());
 app.use(express.json());
@@ -45,6 +46,8 @@ let roundCount = 0;                                             // จำนว�
 let currentRoundJobs = {};                                      // เพิ่มตัวแปรสำหรับเก็บงานในแต่ละรอบ
 
 //---------Use API--------------------------------------------------------
+
+// API สำหรับเริ่มการทำงาน
 
 // API สำหรับเริ่มการทำงาน
 app.post('/start', async (req, res) => {
@@ -175,6 +178,120 @@ app.get('/status', (req, res) => {
     }
 });
 
+// API สำหรับ Solve Cloudflare Turnstile captcha
+app.get('/solver-captcha', async (req, res) => {
+    try {
+        const CAPSOLVER_API_KEY = "CAP-ED680824D056174AB0DDCCAA707A8DCEA48BBF5EB00D87851109F7DE6C0E7A48";
+        const PAGE_URL = URL_TURBOROUTE;
+        const WEBSITE_KEY = "0x4AAAAAAAdPI4avBnC7RBvD";
+        
+        // สร้าง task
+        const taskId = await solvecf(PAGE_URL, WEBSITE_KEY, null, null, CAPSOLVER_API_KEY);
+        
+        if (!taskId) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'ไม่สามารถสร้าง task ได้'
+            });
+        }
+        
+        // รอผลลัพธ์
+        const solution = await solutionGet(taskId, CAPSOLVER_API_KEY);
+        
+        if (solution) {
+            console.log("Solution:", solution);
+            return res.json({
+                status: 'success',
+                solution: solution
+            });
+        } else {
+            return res.status(408).json({
+                status: 'error',
+                message: 'ไม่พบผลลัพธ์หรือหมดเวลารอ'
+            });
+        }
+    } catch (error) {
+        console.error('Error in solve-captcha endpoint:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'เกิดข้อผิดพลาดในการแก้ captcha',
+            error: error.message
+        });
+    }
+});
+
+// ฟังก์ชันสำหรับส่ง request ไปยัง Capsolver API เพื่อสร้าง task
+async function solvecf(pageUrl, websiteKey, metadata_action = null, metadata_cdata = null, apiKey) {
+    try {
+        const url = "https://api.capsolver.com/createTask";
+        const task = {
+            "type": "AntiTurnstileTaskProxyLess",
+            "websiteURL": pageUrl,
+            "websiteKey": websiteKey,
+        };
+        
+        // เพิ่ม metadata ถ้ามีการกำหนด
+        if (metadata_action || metadata_cdata) {
+            task.metadata = {};
+            if (metadata_action) {
+                task.metadata.action = metadata_action;
+            }
+            if (metadata_cdata) {
+                task.metadata.cdata = metadata_cdata;
+            }
+        }
+        
+        const data = {
+            "clientKey": apiKey,
+            "task": task
+        };
+        
+        const response = await axios.post(url, data);
+        const responseData = response.data;
+        // console.log("Response จาก createTask:", responseData);
+        
+        if (responseData.errorId !== 0) {
+            console.log("เกิดข้อผิดพลาดในการสร้าง task:", responseData.errorDescription);
+            return null;
+        }
+        
+        return responseData.taskId;
+    } catch (error) {
+        console.error("Error creating task:", error.message);
+        return null;
+    }
+}
+
+// ฟังก์ชันสำหรับตรวจสอบผลลัพธ์ของ task
+async function solutionGet(taskId, apiKey, timeout = 120) {
+    const url = "https://api.capsolver.com/getTaskResult";
+    const startTime = Date.now();
+    
+    while (true) {
+        try {
+            const data = { "clientKey": apiKey, "taskId": taskId };
+            const response = await axios.post(url, data);
+            const responseData = response.data;
+            
+            const status = responseData.status || '';
+            
+            if (status === "ready") {
+                return responseData.solution;
+            }
+            
+            if ((Date.now() - startTime) / 1000 > timeout) {
+                console.log("หมดเวลารอผลลัพธ์ (Timeout)");
+                return null;
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+            console.error("Error getting solution:", error.message);
+            return null;
+        }
+    }
+}
+
 //---------Use API--------------------------------------------------------
 
 // ฟังก์ชันสำหรับอ่านจำนวนหน้าทั้งหมด
@@ -195,33 +312,99 @@ async function getCurrentPage(page) {
 
 async function acceptJob(page, row) {
     try {
-        // รอให้ popup แสดงขึ้นมา
-        try {
-            await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
-                visible: true,
-                timeout: 3000
-            });
-
-            // คลิกปุ่มยืนยันตัวตน
-            const confirmClicked = await page.evaluate(() => {
-                const confirmButton = document.querySelector('.el-dialog__wrapper[flag="true"] .confirm-button');
-                if (confirmButton) {
-                    confirmButton.click();
+        // คลิกปุ่ม "แข่งขันรับงาน" ในแถวนั้นๆ
+        const clickResult = await page.evaluate((rowElement) => {
+            try {
+                const acceptButton = rowElement.querySelector('span.grab-single');
+                if (acceptButton) {
+                    acceptButton.click();
                     return true;
                 }
                 return false;
+            } catch (err) {
+                return false;
+            }
+        }, row);
+
+        if (!clickResult) {
+            console.log('ไม่พบปุ่มรับงานหรือไม่สามารถคลิกได้');
+            return false;
+        }
+
+        try {
+            // รอให้ popup แสดงขึ้นมา
+            await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
+                visible: true,
+                timeout: 2000
             });
 
-            if (confirmClicked) {
-                console.log('คลิกปุ่มยืนยันตัวตนสำเร็จ!');
-            } else {
-                console.log('ไม่สามารถคลิกปุ่มยืนยันตัวตนได้');
+            try {
+                // รอจนกว่าค่าใน input จะถูกตั้งค่า
+                await page.waitForFunction(() => {
+                    const input = document.querySelector('input[name="cf-turnstile-response"]');
+                    return input && input.value && input.value.trim() !== '';
+                }, { timeout: 3000 });
+
+            } catch (error) {
+                console.log('การยืนยันตัวตนไม่สำเร็จภายในเวลาที่กำหนด');
+                // ยิงไปที่ /solver-captcha
+                const solverCaptcha = await axios.get(getSelfUrl('/solver-captcha'));
+                
+                // ตรวจสอบว่า status เป็น success หรือไม่
+                if (solverCaptcha.data && solverCaptcha.data.status === 'success') {
+                    // console.log('สามารถแก้ captcha ได้สำเร็จ!');
+                    
+                    // เข้าถึงค่า token จาก response
+                    const token = solverCaptcha.data.solution.token;
+                    
+                    // หา input element และใส่ค่า token
+                    const inputSet = await page.evaluate((tokenValue) => {
+                        const input = document.querySelector('input[name="cf-turnstile-response"]');
+                        if (input) {
+                            input.value = tokenValue;
+                            const event = new Event('change', { bubbles: true });
+                            input.dispatchEvent(event);
+                            console.log('Event change dispatched');
+                            return true;
+                        }
+                        return false;
+                    }, token);
+
+                    if (inputSet) {
+                        console.log('ใส่ token ลงใน input สำเร็จ!');
+                    } else {
+                        console.log('ไม่พบ input element สำหรับใส่ token');
+                    }
+
+                } else {
+                    console.log('ไม่สามารถแก้ captcha ได้');
+                    return false;
+                }
             }
+            
+            // รอให้ปุ่มยืนยันแข่งขันรับงานพร้อมใช้งาน
+            await page.waitForFunction(() => {
+                const button = document.querySelector('.el-dialog__footer button');
+                return button && !button.hasAttribute('disabled');
+            }, { timeout: 5000 });
+            console.log('ยืนยันตัวตนแล้ว');
 
-            // หยุดการทำงานของโปรแกรม
-            isRunning = false;
-            console.log('โปรแกรมหยุดทำงานแล้ว');
-
+            // คลิกปุ่มยืนยัน
+            // const buttonClicked = await page.evaluate(() => {
+            //     const button = document.querySelector('.el-dialog__footer button');
+            //     if (button && !button.hasAttribute('disabled')) {
+            //         button.click();
+            //         return true;
+            //     }
+            //     return false;
+            // });
+            
+            // if (buttonClicked) {
+            //     console.log('คลิกปุ่มยืนยันแข่งขันรับงานสำเร็จ!');
+            // } else {
+            //     console.log('ไม่สามารถคลิกปุ่มยืนยันได้');
+            // }
+            
             return true;
 
         } catch (error) {
@@ -252,6 +435,11 @@ async function checkJobConditions(job, config, page, rowElement) {
                 config.myCars[job.route]--;
                 return true;
             }
+
+            // หยุดการทำงานของโปรแกรม
+            isRunning = false;
+            console.log('โปรแกรมหยุดทำงานแล้ว');
+
         }
     }
     return false;
@@ -441,7 +629,6 @@ async function runLoop() {
                     }
 
                 } else {
-                    console.log('ไม่ได้อยู่ที่หน้า Single Hall กำลังนำทาง...');
                     await targetPage.goto(WORKDAY_URL, {
                         waitUntil: 'networkidle0'
                     });
@@ -647,6 +834,11 @@ app.get('/close-chrome', async (req, res) => {
 });
 
 //---------UseChome--------------------------------------------------------
+
+// เพิ่มฟังก์ชันสำหรับสร้าง URL ของตัวเอง
+function getSelfUrl(path) {
+    return `${HTTP}://${SERVER_HOST}:${SERVER_PORT}${path}`;
+}
 
 // เริ่ม server
 app.listen(SERVER_PORT, () => {
