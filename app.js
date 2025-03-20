@@ -67,6 +67,21 @@ app.get('/run-test', async (req, res) => {
 
     try {
         console.log('--> เริ่มทดสอบล็อกอิน');
+
+        const cars = [{ type: '4Wj', quantity: 1 }];
+        const routes = ['CT1-EA2'];
+
+        const carsObject = cars.reduce((acc, car) => {
+            acc[car.type] = car.quantity;
+            return acc;
+        }, {});
+
+        const currentConfig = {
+            myCars: carsObject,
+            routeDirections: routes,
+            assignedCars: Object.fromEntries(Object.keys(carsObject).map(key => [key, 0])),
+            assignedRoutes: Object.fromEntries(Object.keys(carsObject).map(key => [key, []]))
+        };
         
         browser = await puppeteer.launch({
             headless: "new",
