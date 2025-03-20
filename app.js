@@ -3,6 +3,8 @@ const express = require('express');
 const cors = require('cors');
 const app = express();
 const axios = require('axios');
+const path = require('path');
+const fs = require('fs');
 
 app.use(cors());
 app.use(express.json());
@@ -45,9 +47,222 @@ let browser;                                                    // ตัวแ�
 let roundCount = 0;                                             // จำนวนรอบที่ทำงานไปแล้ว
 let currentRoundJobs = {};                                      // เพิ่มตัวแปรสำหรับเก็บงานในแต่ละรอบ
 
+const screenshotsDir = path.join(__dirname, 'screenshots');
+
+// ตรวจสอบว่าโฟลเดอร์มีอยู่จริงหรือไม่
+if (!fs.existsSync(screenshotsDir)) {
+    try {
+        fs.mkdirSync(screenshotsDir, { recursive: true });
+        console.log('สร้างโฟลเดอร์ screenshots สำเร็จ');
+    } catch (err) {
+        console.error('ไม่สามารถสร้างโฟลเดอร์ screenshots:', err.message);
+    }
+}
+
 //---------Use API--------------------------------------------------------
 
-// API สำหรับเริ่มการทำงาน
+app.get('/run-test', async (req, res) => {
+    let browser;
+    let page;
+
+    try {
+        console.log('--> เริ่มทดสอบล็อกอิน');
+        
+        browser = await puppeteer.launch({
+            headless: "new",
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        
+        page = await browser.newPage();
+        await page.setDefaultNavigationTimeout(10000);
+        
+        await page.goto('https://th.turboroute.ai/#/login');
+        await page.waitForSelector('form.login-form', { visible: true });
+        
+        await page.type('input[name="account"]', '0955294478');
+        await page.type('input[name="password"]', 'FleetSPT@2468');
+        await page.click('button.el-button--primary.el-button--medium');
+        await page.screenshot({ path: path.join(screenshotsDir, '1_login_form.png') });
+        
+        await page.waitForNavigation({ waitUntil: 'networkidle0' });
+        await page.screenshot({ path: path.join(screenshotsDir, '2_home_form.png') });
+        console.log('--> เข้าสู่หน้าหลัก');
+
+        await page.waitForSelector('a[href="#/grab-single/single-hall"]', {visible: true, timeout: 10000});
+        await page.click('a[href="#/grab-single/single-hall"]');
+        await Promise.all([
+            page.waitForNavigation({ waitUntil: 'networkidle0' }),
+            page.waitForSelector('table.el-table__body', { visible: true })
+        ]);
+        await page.screenshot({ path: path.join(screenshotsDir, '3_single_hall.png') });
+        console.log('--> เข้าสู่หน้างานสำเร็จ');
+		
+        res.json({ status: 'success', message: 'สำเร็จ'});
+    } catch (error) {
+        console.error('error -->:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'ล้มเหลว',
+            error: error.message
+        });
+    } finally {
+        if (browser) {
+            await browser.close();
+            console.log('ปิด browser');
+        }
+    }
+});
+
+// API สำหรับตรวจสอบโครงสร้างหน้าเว็บ
+app.get('/check-structure', async (req, res) => {
+    let browser;
+    let page;
+
+    try {
+        console.log('เริ่มตรวจสอบโครงสร้างหน้าเว็บ');
+        
+        browser = await puppeteer.launch({
+            headless: true,
+            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        });
+        
+        page = await browser.newPage();
+        
+        // เพิ่ม event listener สำหรับ console.log จากหน้าเว็บ
+        page.on('console', msg => console.log('Browser Log:', msg.text()));
+        
+        console.log('กำลังโหลดหน้าเว็บ...');
+        const response = await page.goto('https://th.turboroute.ai/#/login', {
+            waitUntil: 'networkidle0'
+        });
+        
+        console.log('สถานะการโหลดหน้าเว็บ:', response.status());
+
+        // ตรวจสอบโครงสร้างหน้าเว็บอย่างละเอียด
+        const pageDetails = await page.evaluate(() => {
+            const getElementDetails = (element) => {
+                if (!element) return null;
+                const computedStyle = window.getComputedStyle(element);
+                return {
+                    tagName: element.tagName.toLowerCase(),
+                    id: element.id,
+                    className: element.className,
+                    type: element.type,
+                    name: element.name,
+                    value: element.value,
+                    placeholder: element.placeholder,
+                    required: element.required,
+                    disabled: element.disabled,
+                    visible: computedStyle.display !== 'none' && computedStyle.visibility !== 'hidden',
+                    position: {
+                        x: element.offsetLeft,
+                        y: element.offsetTop
+                    },
+                    size: {
+                        width: element.offsetWidth,
+                        height: element.offsetHeight
+                    }
+                };
+            };
+
+            // ตรวจสอบฟอร์มล็อกอิน
+            const loginForm = document.querySelector('form');
+            const formDetails = loginForm ? {
+                ...getElementDetails(loginForm),
+                action: loginForm.action,
+                method: loginForm.method,
+                enctype: loginForm.enctype
+            } : null;
+
+            // ตรวจสอบ input fields
+            const inputs = Array.from(document.querySelectorAll('input')).map(input => ({
+                ...getElementDetails(input),
+                parentElement: {
+                    className: input.parentElement?.className,
+                    tagName: input.parentElement?.tagName.toLowerCase()
+                }
+            }));
+
+            // ตรวจสอบปุ่มทั้งหมด
+            const buttons = Array.from(document.querySelectorAll('button')).map(button => ({
+                ...getElementDetails(button),
+                text: button.textContent.trim(),
+                parentElement: {
+                    className: button.parentElement?.className,
+                    tagName: button.parentElement?.tagName.toLowerCase()
+                }
+            }));
+
+            // ตรวจสอบ error message containers
+            const possibleErrorContainers = Array.from(document.querySelectorAll('.el-message-box, .el-message, .error-message')).map(container => ({
+                ...getElementDetails(container),
+                text: container.textContent.trim()
+            }));
+
+            // ตรวจสอบ loading indicators
+            const loadingElements = Array.from(document.querySelectorAll('.loading, .el-loading, .spinner')).map(element => ({
+                ...getElementDetails(element),
+                text: element.textContent.trim()
+            }));
+
+            return {
+                title: document.title,
+                url: window.location.href,
+                form: formDetails,
+                inputs,
+                buttons,
+                errorContainers: possibleErrorContainers,
+                loadingIndicators: loadingElements,
+                viewport: {
+                    width: window.innerWidth,
+                    height: window.innerHeight
+                }
+            };
+        });
+
+        // บันทึกภาพหน้าจอ
+        const screenshotPath = path.join(screenshotsDir, `structure_check_${Date.now()}.png`);
+        await page.screenshot({ 
+            path: screenshotPath,
+            fullPage: true
+        });
+
+        // สรุปข้อมูลสำคัญ
+        const summary = {
+            inputFields: pageDetails.inputs.length,
+            buttons: pageDetails.buttons.length,
+            hasLoginForm: !!pageDetails.form,
+            foundElements: {
+                usernameField: pageDetails.inputs.some(input => input.name === 'account'),
+                passwordField: pageDetails.inputs.some(input => input.name === 'password'),
+                loginButton: pageDetails.buttons.some(btn => btn.text.includes('เข้าสู่ระบบ'))
+            }
+        };
+
+        console.log('\nสรุปโครงสร้างหน้าเว็บ:', JSON.stringify(summary, null, 2));
+
+        res.json({
+            status: 'success',
+            message: 'ตรวจสอบโครงสร้างหน้าเว็บเสร็จสิ้น',
+            summary,
+            details: pageDetails,
+            screenshot: path.basename(screenshotPath)
+        });
+
+    } catch (error) {
+        console.error('เกิดข้อผิดพลาดในการตรวจสอบ:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'เกิดข้อผิดพลาดในการตรวจสอบโครงสร้างหน้าเว็บ',
+            error: error.message
+        });
+    } finally {
+        if (browser) {
+            await browser.close();
+            console.log('ปิด browser');
+        }
+    }
+});
 
 // API สำหรับเริ่มการทำงาน
 app.post('/start', async (req, res) => {
@@ -332,86 +547,45 @@ async function acceptJob(page, row) {
         }
 
         try {
+            // บันทึกภาพหน้าจอเมื่อคลิกปุ่มรับงานแล้ว
+            await page.screenshot({ path: path.join(screenshotsDir, '1_after_click_accept.png') });
+            
             // รอให้ popup แสดงขึ้นมา
             await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
                 visible: true,
                 timeout: 2000
             });
+            
+            await new Promise(resolve => setTimeout(resolve, 4000));
 
-            try {
-                // รอจนกว่าค่าใน input จะถูกตั้งค่า
-                await page.waitForFunction(() => {
-                    const input = document.querySelector('input[name="cf-turnstile-response"]');
-                    return input && input.value && input.value.trim() !== '';
-                }, { timeout: 3000 });
+            // บันทึกภาพหน้าจอเมื่อ popup แสดงขึ้นมา
+            await page.screenshot({ path: path.join(screenshotsDir, '2_popup_appeared.png') });
 
-            } catch (error) {
-                console.log('การยืนยันตัวตนไม่สำเร็จภายในเวลาที่กำหนด');
-                // ยิงไปที่ /solver-captcha
-                const solverCaptcha = await axios.get(getSelfUrl('/solver-captcha'));
-                
-                // ตรวจสอบว่า status เป็น success หรือไม่
-                if (solverCaptcha.data && solverCaptcha.data.status === 'success') {
-                    // console.log('สามารถแก้ captcha ได้สำเร็จ!');
-                    
-                    // เข้าถึงค่า token จาก response
-                    const token = solverCaptcha.data.solution.token;
-                    
-                    // หา input element และใส่ค่า token
-                    const inputSet = await page.evaluate((tokenValue) => {
-                        const input = document.querySelector('input[name="cf-turnstile-response"]');
-                        if (input) {
-                            input.value = tokenValue;
-                            const event = new Event('change', { bubbles: true });
-                            input.dispatchEvent(event);
-                            console.log('Event change dispatched');
-                            return true;
-                        }
-                        return false;
-                    }, token);
+            await page.waitForSelector('input[name="cf-turnstile-response"]', { visible: true });
 
-                    if (inputSet) {
-                        console.log('ใส่ token ลงใน input สำเร็จ!');
-                    } else {
-                        console.log('ไม่พบ input element สำหรับใส่ token');
-                    }
+            await page.click('input[name="cf-turnstile-response"]'); 
+            await page.focus('input[name="cf-turnstile-response"]'); 
 
-                } else {
-                    console.log('ไม่สามารถแก้ captcha ได้');
-                    return false;
-                }
+            // Check if the input is focused
+            const isInputFocused = await page.evaluate(() => {
+                const input = document.querySelector('input[name="cf-turnstile-response"]');
+                return input === document.activeElement;
+            });
+
+            if (isInputFocused) {
+                console.log('Input is focused');
+            } else {
+                console.log('Input is not focused');
             }
-            
-            // รอให้ปุ่มยืนยันแข่งขันรับงานพร้อมใช้งาน
-            await page.waitForFunction(() => {
-                const button = document.querySelector('.el-dialog__footer button');
-                return button && !button.hasAttribute('disabled');
-            }, { timeout: 5000 });
-            console.log('ยืนยันตัวตนแล้ว');
 
-            // คลิกปุ่มยืนยัน
-            // const buttonClicked = await page.evaluate(() => {
-            //     const button = document.querySelector('.el-dialog__footer button');
-            //     if (button && !button.hasAttribute('disabled')) {
-            //         button.click();
-            //         return true;
-            //     }
-            //     return false;
-            // });
-            
-            // if (buttonClicked) {
-            //     console.log('คลิกปุ่มยืนยันแข่งขันรับงานสำเร็จ!');
-            // } else {
-            //     console.log('ไม่สามารถคลิกปุ่มยืนยันได้');
-            // }
-            
             return true;
 
         } catch (error) {
-            console.log('เกิดข้อผิดพลาดระหว่างรอ Popup:', error.message);
+            console.error('เกิดข้อผิดพลาดระหว่างรอ Popup:', error.message);
+            // บันทึกภาพหน้าจอเมื่อเกิดข้อผิดพลาด
+            await page.screenshot({ path: path.join(screenshotsDir, 'error_' + Date.now() + '.png') });
             return false;
         }
-
     } catch (error) {
         console.error('เกิดข้อผิดพลาดในการรับงาน:', error.message);
         return false;

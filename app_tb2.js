@@ -2,6 +2,9 @@ const puppeteer = require('puppeteer');
 const express = require('express');
 const cors = require('cors');
 const app = express();
+const axios = require('axios');
+const path = require('path');
+const fs = require('fs');
 
 app.use(cors());
 app.use(express.json());
@@ -44,7 +47,22 @@ let browser;                                                    // ตัวแ�
 let roundCount = 0;                                             // จำนวนรอบที่ทำงานไปแล้ว
 let currentRoundJobs = {};                                      // เพิ่มตัวแปรสำหรับเก็บงานในแต่ละรอบ
 
+// เพิ่มโค้ดนี้หลังจากการ import modules ที่ด้านบนของไฟล์
+const screenshotsDir = path.join(__dirname, 'screenshots');
+
+// ตรวจสอบว่าโฟลเดอร์มีอยู่จริงหรือไม่
+if (!fs.existsSync(screenshotsDir)) {
+    try {
+        fs.mkdirSync(screenshotsDir, { recursive: true });
+        console.log('สร้างโฟลเดอร์ screenshots สำเร็จ');
+    } catch (err) {
+        console.error('ไม่สามารถสร้างโฟลเดอร์ screenshots:', err.message);
+    }
+}
+
 //---------Use API--------------------------------------------------------
+
+// API สำหรับเริ่มการทำงาน
 
 // API สำหรับเริ่มการทำงาน
 app.post('/start', async (req, res) => {
@@ -175,6 +193,120 @@ app.get('/status', (req, res) => {
     }
 });
 
+// API สำหรับ Solve Cloudflare Turnstile captcha
+app.get('/solver-captcha', async (req, res) => {
+    try {
+        const CAPSOLVER_API_KEY = "CAP-ED680824D056174AB0DDCCAA707A8DCEA48BBF5EB00D87851109F7DE6C0E7A48";
+        const PAGE_URL = URL_TURBOROUTE;
+        const WEBSITE_KEY = "0x4AAAAAAAdPI4avBnC7RBvD";
+        
+        // สร้าง task
+        const taskId = await solvecf(PAGE_URL, WEBSITE_KEY, null, null, CAPSOLVER_API_KEY);
+        
+        if (!taskId) {
+            return res.status(400).json({
+                status: 'error',
+                message: 'ไม่สามารถสร้าง task ได้'
+            });
+        }
+        
+        // รอผลลัพธ์
+        const solution = await solutionGet(taskId, CAPSOLVER_API_KEY);
+        
+        if (solution) {
+            console.log("Solution:", solution);
+            return res.json({
+                status: 'success',
+                solution: solution
+            });
+        } else {
+            return res.status(408).json({
+                status: 'error',
+                message: 'ไม่พบผลลัพธ์หรือหมดเวลารอ'
+            });
+        }
+    } catch (error) {
+        console.error('Error in solve-captcha endpoint:', error);
+        res.status(500).json({
+            status: 'error',
+            message: 'เกิดข้อผิดพลาดในการแก้ captcha',
+            error: error.message
+        });
+    }
+});
+
+// ฟังก์ชันสำหรับส่ง request ไปยัง Capsolver API เพื่อสร้าง task
+async function solvecf(pageUrl, websiteKey, metadata_action = null, metadata_cdata = null, apiKey) {
+    try {
+        const url = "https://api.capsolver.com/createTask";
+        const task = {
+            "type": "AntiTurnstileTaskProxyLess",
+            "websiteURL": pageUrl,
+            "websiteKey": websiteKey,
+        };
+        
+        // เพิ่ม metadata ถ้ามีการกำหนด
+        if (metadata_action || metadata_cdata) {
+            task.metadata = {};
+            if (metadata_action) {
+                task.metadata.action = metadata_action;
+            }
+            if (metadata_cdata) {
+                task.metadata.cdata = metadata_cdata;
+            }
+        }
+        
+        const data = {
+            "clientKey": apiKey,
+            "task": task
+        };
+        
+        const response = await axios.post(url, data);
+        const responseData = response.data;
+        // console.log("Response จาก createTask:", responseData);
+        
+        if (responseData.errorId !== 0) {
+            console.log("เกิดข้อผิดพลาดในการสร้าง task:", responseData.errorDescription);
+            return null;
+        }
+        
+        return responseData.taskId;
+    } catch (error) {
+        console.error("Error creating task:", error.message);
+        return null;
+    }
+}
+
+// ฟังก์ชันสำหรับตรวจสอบผลลัพธ์ของ task
+async function solutionGet(taskId, apiKey, timeout = 120) {
+    const url = "https://api.capsolver.com/getTaskResult";
+    const startTime = Date.now();
+    
+    while (true) {
+        try {
+            const data = { "clientKey": apiKey, "taskId": taskId };
+            const response = await axios.post(url, data);
+            const responseData = response.data;
+            
+            const status = responseData.status || '';
+            
+            if (status === "ready") {
+                return responseData.solution;
+            }
+            
+            if ((Date.now() - startTime) / 1000 > timeout) {
+                console.log("หมดเวลารอผลลัพธ์ (Timeout)");
+                return null;
+            }
+            
+            await new Promise(resolve => setTimeout(resolve, 1000));
+        } catch (error) {
+            console.error("Error getting solution:", error.message);
+            return null;
+        }
+    }
+}
+
 //---------Use API--------------------------------------------------------
 
 // ฟังก์ชันสำหรับอ่านจำนวนหน้าทั้งหมด
@@ -195,40 +327,171 @@ async function getCurrentPage(page) {
 
 async function acceptJob(page, row) {
     try {
-        // รอให้ popup แสดงขึ้นมา
-        try {
-            await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
-                visible: true,
-                timeout: 3000
-            });
-
-            // คลิกปุ่มยืนยันตัวตน
-            const confirmClicked = await page.evaluate(() => {
-                const confirmButton = document.querySelector('.el-dialog__wrapper[flag="true"] .confirm-button');
-                if (confirmButton) {
-                    confirmButton.click();
+        // คลิกปุ่ม "แข่งขันรับงาน" ในแถวนั้นๆ
+        const clickResult = await page.evaluate((rowElement) => {
+            try {
+                const acceptButton = rowElement.querySelector('span.grab-single');
+                if (acceptButton) {
+                    acceptButton.click();
                     return true;
                 }
                 return false;
-            });
-
-            if (confirmClicked) {
-                console.log('คลิกปุ่มยืนยันตัวตนสำเร็จ!');
-            } else {
-                console.log('ไม่สามารถคลิกปุ่มยืนยันตัวตนได้');
+            } catch (err) {
+                return false;
             }
+        }, row);
 
-            // หยุดการทำงานของโปรแกรม
-            isRunning = false;
-            console.log('โปรแกรมหยุดทำงานแล้ว');
-
-            return true;
-
-        } catch (error) {
-            console.log('เกิดข้อผิดพลาดระหว่างรอ Popup:', error.message);
+        if (!clickResult) {
+            console.log('ไม่พบปุ่มรับงานหรือไม่สามารถคลิกได้');
             return false;
         }
 
+        try {
+            // บันทึกภาพหน้าจอเมื่อคลิกปุ่มรับงานแล้ว
+            await page.screenshot({ path: path.join(screenshotsDir, '1_after_click_accept.png') });
+            
+            // รอให้ popup แสดงขึ้นมา
+            await page.waitForSelector('.el-dialog__wrapper[flag="true"]', {
+                visible: true,
+                timeout: 2000
+            });
+            
+            await new Promise(resolve => setTimeout(resolve, 4000));
+
+            // บันทึกภาพหน้าจอเมื่อ popup แสดงขึ้นมา
+            await page.screenshot({ path: path.join(screenshotsDir, '2_popup_appeared.png') });
+
+            await page.waitForSelector('input[name="cf-turnstile-response"]', { visible: true });
+
+            await page.click('input[name="cf-turnstile-response"]'); 
+            await page.focus('input[name="cf-turnstile-response"]'); 
+
+            // Check if the input is focused
+            const isInputFocused = await page.evaluate(() => {
+                const input = document.querySelector('input[name="cf-turnstile-response"]');
+                return input === document.activeElement;
+            });
+
+            if (isInputFocused) {
+                console.log('Input is focused');
+            } else {
+                console.log('Input is not focused');
+            }
+            
+            // // ยิงไปที่ /solver-captcha เพื่อแก้ captcha
+            // console.log('เริ่มการแก้ captcha...');
+            // const solverCaptcha = await axios.get(getSelfUrl('/solver-captcha'));
+            
+            // // ตรวจสอบว่า status เป็น success หรือไม่
+            // if (solverCaptcha.data && solverCaptcha.data.status === 'success') {
+            //     // เข้าถึงค่า token จาก response
+            //     const token = solverCaptcha.data.solution.token;
+            //     console.log('ได้รับ token สำหรับ captcha แล้ว');
+                
+            //     // หา input element และใส่ค่า token
+            //     const inputSet = await page.evaluate((tokenValue) => {
+            //         const input = document.querySelector('input[name="cf-turnstile-response"]');
+            //         if (input) {
+            //             input.value = tokenValue;
+            //             const event = new Event('change', { bubbles: true });
+            //             input.dispatchEvent(event);
+            //             return true;
+            //         }
+            //         return false;
+            //     }, token);
+
+            //     if (inputSet) {
+            //         console.log('ใส่ token ลงใน input สำเร็จ!');
+            //         // บันทึกภาพหน้าจอหลังใส่ token
+            //         await page.screenshot({ path: path.join(screenshotsDir, '3_token_set.png') });
+                    
+            //         // คลิกที่ input หลังจากใส่ token เพื่อให้เว็บรับทราบการเปลี่ยนแปลง
+            //         try {
+            //             // คลิกที่ input element โดยตรง
+            //             await page.evaluate(() => {
+            //                 const input = document.querySelector('input[name="cf-turnstile-response"]');
+            //                 if (input) {
+            //                     // คลิกที่ input
+            //                     input.click();
+            //                     // focus ไปที่ input
+            //                     input.focus();
+            //                     // blur ออกจาก input เพื่อให้เกิด event เพิ่มเติม
+            //                     input.blur();
+            //                     return true;
+            //                 }
+            //                 return false;
+            //             });
+                        
+            //             console.log('คลิกที่ input หลังใส่ token สำเร็จ!');
+            //             await page.screenshot({ path: path.join(screenshotsDir, '3.5_after_input_click.png') });
+                        
+            //             // รอสักครู่เพื่อให้เว็บประมวลผล
+            //             await new Promise(resolve => setTimeout(resolve, 1000));
+                        
+            //             // ตรวจสอบสถานะปุ่ม
+            //             const buttonStatus = await page.evaluate(() => {
+            //                 const button = document.querySelector('.el-dialog__footer button');
+            //                 return button && !button.hasAttribute('disabled') ? 'enabled' : 'disabled';
+            //             });
+                        
+            //             console.log('สถานะปุ่มหลังคลิก input:', buttonStatus);
+                        
+            //             // บันทึกภาพหน้าจอหลังรอการประมวลผล
+            //             await page.screenshot({ path: path.join(screenshotsDir, '4_after_processing.png') });
+                        
+            //             // // ถ้าปุ่มพร้อมใช้งาน ให้คลิกปุ่ม
+            //             // if (buttonStatus === 'enabled') {
+            //             //     // คลิกปุ่ม grab an order
+            //             //     const buttonClicked = await page.evaluate(() => {
+            //             //         const button = document.querySelector('.el-dialog__footer button');
+            //             //         if (button && !button.hasAttribute('disabled')) {
+            //             //             button.click();
+            //             //             return true;
+            //             //         }
+            //             //         return false;
+            //             //     });
+                            
+            //             //     if (buttonClicked) {
+            //             //         console.log('คลิกปุ่มยืนยันสำเร็จ');
+            //             //         await page.screenshot({ path: path.join(screenshotsDir, '5_after_button_click.png') });
+                                
+            //             //         // รอให้ popup หายไป
+            //             //         try {
+            //             //             await page.waitForFunction(() => {
+            //             //                 return !document.querySelector('.el-dialog__wrapper[flag="true"]') || 
+            //             //                       document.querySelector('.el-dialog__wrapper[flag="true"]').style.display === 'none';
+            //             //             }, { timeout: 5000 });
+            //             //             console.log('การยืนยันรับงานเสร็จสมบูรณ์');
+            //             //             await page.screenshot({ path: path.join(screenshotsDir, '6_confirmation_complete.png') });
+            //             //             return true;
+            //             //         } catch (error) {
+            //             //             console.log('รอการปิด popup หลังยืนยันเกินเวลาที่กำหนด');
+            //             //         }
+            //             //     } else {
+            //             //         console.log('ไม่สามารถคลิกปุ่มยืนยันได้');
+            //             //     }
+            //             // } else {
+            //             //     console.log('ปุ่มยังไม่พร้อมใช้งานหลังจากคลิกที่ input');
+            //             // }
+            //         } catch (error) {
+            //             console.log('เกิดข้อผิดพลาดในการคลิก input:', error.message);
+            //         }
+            //     } else {
+            //         console.log('ไม่พบ input element สำหรับใส่ token');
+            //     }
+            // } else {
+            //     console.log('ไม่สามารถแก้ captcha ได้');
+            //     return false;
+            // }
+            
+            return true; 
+
+        } catch (error) {
+            console.error('เกิดข้อผิดพลาดระหว่างรอ Popup:', error.message);
+            // บันทึกภาพหน้าจอเมื่อเกิดข้อผิดพลาด
+            await page.screenshot({ path: path.join(screenshotsDir, 'error_' + Date.now() + '.png') });
+            return false;
+        }
     } catch (error) {
         console.error('เกิดข้อผิดพลาดในการรับงาน:', error.message);
         return false;
@@ -252,6 +515,11 @@ async function checkJobConditions(job, config, page, rowElement) {
                 config.myCars[job.route]--;
                 return true;
             }
+
+            // หยุดการทำงานของโปรแกรม
+            isRunning = false;
+            console.log('โปรแกรมหยุดทำงานแล้ว');
+
         }
     }
     return false;
@@ -441,7 +709,6 @@ async function runLoop() {
                     }
 
                 } else {
-                    console.log('ไม่ได้อยู่ที่หน้า Single Hall กำลังนำทาง...');
                     await targetPage.goto(WORKDAY_URL, {
                         waitUntil: 'networkidle0'
                     });
@@ -647,6 +914,11 @@ app.get('/close-chrome', async (req, res) => {
 });
 
 //---------UseChome--------------------------------------------------------
+
+// เพิ่มฟังก์ชันสำหรับสร้าง URL ของตัวเอง
+function getSelfUrl(path) {
+    return `${HTTP}://${SERVER_HOST}:${SERVER_PORT}${path}`;
+}
 
 // เริ่ม server
 app.listen(SERVER_PORT, () => {
