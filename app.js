@@ -103,7 +103,7 @@ app.get('/run-test', async (req, res) => {
         await page.screenshot({ path: path.join(screenshotsDir, '2_home_form.png') });
         console.log('--> เข้าสู่หน้าหลัก');
 
-        await page.waitForSelector('a[href="#/grab-single/single-hall"]', {visible: true, timeout: 10000});
+        await page.waitForSelector('a[href="#/grab-single/single-hall"]', { visible: true });
         await page.click('a[href="#/grab-single/single-hall"]');
         await Promise.all([
             page.waitForNavigation({ waitUntil: 'networkidle0' }),
@@ -111,8 +111,117 @@ app.get('/run-test', async (req, res) => {
         ]);
         await page.screenshot({ path: path.join(screenshotsDir, '3_single_hall.png') });
         console.log('--> เข้าสู่หน้างานสำเร็จ');
-		
+
+        const clickResult = await page.evaluate(() => {
+            try {
+                const firstRow = document.querySelector('table.el-table__body tbody tr');
+                const acceptButton = firstRow.querySelector('span.grab-single');
+                if (acceptButton) {
+                    acceptButton.click();
+                    return true;
+                }
+                return false;
+            } catch (err) {
+                return false;
+            }
+        });
+
+        if (clickResult) {
+            console.log('--> คลิกปุ่มแข่งขันรับงานสำเร็จ');
+            await page.waitForSelector('.el-dialog__wrapper[flag="true"]', { visible: true, timeout: 5000 });
+            await new Promise(resolve => setTimeout(resolve, 4000));
+            await page.screenshot({ path: path.join(screenshotsDir, '4_open_dialog.png') });
+
+            try {
+                // await page.waitForSelector('input[name="cf-turnstile-response"]', { visible: true });
+                await page.waitForSelector('#verify-container', { visible: true, timeout: 5000 });
+                
+                console.log('--> รอการยืนยันตัวตน');
+                const verificationStatus = await page.evaluate(() => {
+                    const turnstileInput = document.querySelector('input[name="cf-turnstile-response"]');
+                    const hasResponse = turnstileInput && turnstileInput.value !== '';
+                    const checkbox = document.querySelector('.cf-turnstile iframe');
+                    const isChecked = checkbox && checkbox.getAttribute('data-checked') === 'true';
+                    return {hasResponse, isChecked};
+                });
+                console.log('--> ตรวจสอบสถานะการยืนยันตัวตนเสร็จสิ้น');
+
+                if (verificationStatus.hasResponse && verificationStatus.isChecked) {
+                    console.log('✅ การยืนยันตัวตนสำเร็จแล้ว');
+                } else {
+                    console.log('⚠️ ยังไม่ได้ยืนยันตัวตน');
+                    if (!verificationStatus.hasResponse) {
+                        console.log('- ยังไม่มีการตอบสนองจาก Turnstile');
+                    }
+                    if (!verificationStatus.isChecked) {
+                        console.log('- ยังไม่ได้กดเช็กบ็อกซ์');
+                    }
+
+                    const solverCaptcha = await axios.get(getSelfUrl('/solver-captcha'));
+                    if (solverCaptcha.data && solverCaptcha.data.status === 'success') {
+                        const token = solverCaptcha.data.solution.token;
+                        
+                        const setToken = await page.evaluate((tokenValue) => {
+                            try {
+                                const input = document.querySelector('input[name="cf-turnstile-response"]');
+                                if (!input) return false;
+
+                                input.value = tokenValue;
+                                
+                                const events = ['input', 'change', 'blur'];
+                                events.forEach(eventType => {
+                                    input.dispatchEvent(new Event(eventType, { bubbles: true }));
+                                });
+
+                                return input.value === tokenValue;
+                            } catch (err) {
+                                console.error('Error:', err);
+                                return false;
+                            }
+                        }, token);
+
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        await page.screenshot({ path: path.join(screenshotsDir, '5_set_token.png') });
+
+                        if (setToken) {
+                            console.log('--> เซ็ต token สำเร็จ');
+                            
+                            const verifyStatus = await page.evaluate(() => {
+                                const button = document.querySelector('.el-dialog__footer button');
+                                const turnstileResponse = document.querySelector('input[name="cf-turnstile-response"]');
+                                return {
+                                    buttonEnabled: button && !button.hasAttribute('disabled'),
+                                    hasToken: turnstileResponse && turnstileResponse.value !== '',
+                                    tokenValue: turnstileResponse ? turnstileResponse.value : 'ไม่พบค่า'
+                                };
+                            });
+
+                            console.log('สถานะการยืนยัน:', {
+                                'ปุ่มพร้อมใช้งาน': verifyStatus.buttonEnabled,
+                                'มี Token': verifyStatus.hasToken,
+                                'ค่า Token': verifyStatus.tokenValue.substring(0, 30) + '...'
+                            });
+
+                            await new Promise(resolve => setTimeout(resolve, 4000));
+                            await page.screenshot({ path: path.join(screenshotsDir, '6_view_status.png') });
+                        } else {
+                            console.log('ไม่สามารถเซ็ต token ได้');
+                        }
+
+                    } else {
+                        console.log('ไม่สามารถแก้ captcha ได้');
+                    }
+                }
+
+            } catch (error) {
+                console.error('เกิดข้อผิดพลาดในการตรวจสอบการยืนยันตัวตน:', error.message);
+            }
+
+        } else {
+            console.log('ไม่พบปุ่มรับงานหรือไม่สามารถคลิกได้');
+        }
         res.json({ status: 'success', message: 'สำเร็จ'});
+
     } catch (error) {
         console.error('error -->:', error);
         res.status(500).json({
